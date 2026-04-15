@@ -46,7 +46,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - nginx_conf:/etc/nginx/conf.d
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
       interval: 5s
