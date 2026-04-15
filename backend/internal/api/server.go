@@ -1,6 +1,7 @@
 package api
 
 import (
+	"sni-gateway/internal/config"
 	"sni-gateway/internal/services"
 
 	"github.com/gofiber/fiber/v2"
@@ -15,9 +16,11 @@ type Server struct {
 	rules   *RuleHandler
 	subs    *SubscriptionHandler
 	publish *PublishHandler
+	login   *LoginHandler
+	cfg     *config.Config
 }
 
-func NewServer(exitMgr *services.ExitManager, subMgr *services.SubscriptionManager, cfgGen *services.ConfigGenerator) *Server {
+func NewServer(cfg *config.Config, exitMgr *services.ExitManager, subMgr *services.SubscriptionManager, cfgGen *services.ConfigGenerator) *Server {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -40,6 +43,8 @@ func NewServer(exitMgr *services.ExitManager, subMgr *services.SubscriptionManag
 		rules:   NewRuleHandler(),
 		subs:    NewSubscriptionHandler(subMgr, cfgGen),
 		publish: NewPublishHandler(cfgGen),
+		login:   NewLoginHandler(cfg.JWTSecret, cfg.AdminUsername, cfg.AdminPassword),
+		cfg:     cfg,
 	}
 
 	s.registerRoutes()
@@ -47,7 +52,19 @@ func NewServer(exitMgr *services.ExitManager, subMgr *services.SubscriptionManag
 }
 
 func (s *Server) registerRoutes() {
-	api := s.app.Group("/api")
+	// Health check (public)
+	s.app.Get("/health", func(c *fiber.Ctx) error {
+		return c.SendString("ok")
+	})
+
+	// Auth endpoint (public)
+	s.app.Post("/api/auth/login", s.login.Login)
+
+	// All other /api routes require a valid JWT
+	api := s.app.Group("/api", AuthMiddleware(s.cfg.JWTSecret))
+
+	// Stats
+	api.Get("/stats", s.dashboardStats)
 
 	// Rules
 	api.Get("/rules", s.rules.List)
@@ -82,15 +99,7 @@ func (s *Server) registerRoutes() {
 	api.Post("/publish/rollback", s.publish.Rollback)
 	api.Get("/publish/history", s.publish.History)
 
-	// Health check
-	s.app.Get("/health", func(c *fiber.Ctx) error {
-		return c.SendString("ok")
-	})
-
-	// Dashboard stats
-	api.Get("/stats", s.dashboardStats)
-
-	// Static files for frontend
+	// Static files for frontend (must be last)
 	s.app.Static("/", "./public")
 	s.app.Get("/*", func(c *fiber.Ctx) error {
 		return c.SendFile("./public/index.html")

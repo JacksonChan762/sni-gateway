@@ -40,6 +40,8 @@ services:
       NGINX_CONFIG_DIR: /etc/nginx/conf.d
       DOCKER_SOCKET: /var/run/docker.sock
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - nginx_conf:/etc/nginx/conf.d

@@ -57,7 +57,7 @@ func main() {
 	subMgr.Start()
 	defer subMgr.Stop()
 
-	server := api.NewServer(exitMgr, subMgr, cfgGen)
+	server := api.NewServer(cfg, exitMgr, subMgr, cfgGen)
 
 	addr := ":" + cfg.Port
 	log.Printf("SNI Gateway backend starting on %s", addr)

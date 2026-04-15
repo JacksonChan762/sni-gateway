@@ -5,7 +5,37 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-// Types
+// Attach JWT token on every request
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('sni_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// On 401, clear credentials so the app re-renders to the login screen
+api.interceptors.response.use(
+  r => r,
+  err => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('sni_token')
+      localStorage.removeItem('sni_username')
+      window.dispatchEvent(new Event('sni:logout'))
+    }
+    return Promise.reject(err)
+  }
+)
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+export const loginUser = (username: string, password: string) =>
+  axios
+    .post<{ token: string; username: string }>('/api/auth/login', { username, password })
+    .then(r => r.data)
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
 export interface Exit {
   id: number
   name: string
@@ -66,10 +96,12 @@ export interface Stats {
   last_publish: PublishHistory
 }
 
-// Stats
+// ─── Stats ───────────────────────────────────────────────────────────────────
+
 export const getStats = () => api.get<Stats>('/stats').then(r => r.data)
 
-// Exits
+// ─── Exits ───────────────────────────────────────────────────────────────────
+
 export const getExits = () => api.get<Exit[]>('/exits').then(r => r.data)
 export const createExit = (data: Partial<Exit> & { config_yaml?: string; wireguard_private_key?: string; wireguard_addresses?: string; openvpn_user?: string; openvpn_password?: string }) =>
   api.post<Exit>('/exits', data).then(r => r.data)
@@ -87,14 +119,16 @@ export const getExitLogs = (id: number, tail = 100) =>
 export const getExitStatus = (id: number) =>
   api.get<{ status: string; public_ip: string }>(`/exits/${id}/status`).then(r => r.data)
 
-// Rules
+// ─── Rules ───────────────────────────────────────────────────────────────────
+
 export const getRules = () => api.get<Rule[]>('/rules').then(r => r.data)
 export const createRule = (data: Partial<Rule>) => api.post<Rule>('/rules', data).then(r => r.data)
 export const updateRule = (id: number, data: Partial<Rule>) =>
   api.put<Rule>(`/rules/${id}`, data).then(r => r.data)
 export const deleteRule = (id: number) => api.delete(`/rules/${id}`).then(r => r.data)
 
-// Subscriptions
+// ─── Subscriptions ───────────────────────────────────────────────────────────
+
 export const getSubscriptions = () => api.get<Subscription[]>('/subscriptions').then(r => r.data)
 export const createSubscription = (data: Partial<Subscription>) =>
   api.post<Subscription>('/subscriptions', data).then(r => r.data)
@@ -105,7 +139,8 @@ export const deleteSubscription = (id: number) =>
 export const syncSubscription = (id: number) =>
   api.post(`/subscriptions/${id}/sync`).then(r => r.data)
 
-// Publish
+// ─── Publish ─────────────────────────────────────────────────────────────────
+
 export const previewConfig = () =>
   api.post<{ config: string }>('/publish/preview').then(r => r.data)
 export const validateConfig = () =>
@@ -114,3 +149,15 @@ export const applyConfig = () => api.post('/publish/apply').then(r => r.data)
 export const rollbackConfig = () => api.post('/publish/rollback').then(r => r.data)
 export const getPublishHistory = () =>
   api.get<PublishHistory[]>('/publish/history').then(r => r.data)
+
+// ─── Error helper ─────────────────────────────────────────────────────────────
+
+export function getApiError(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const msg = error.response?.data?.error
+    if (typeof msg === 'string' && msg.trim()) return msg
+    return error.message
+  }
+  if (error instanceof Error) return error.message
+  return 'Unknown error'
+}
