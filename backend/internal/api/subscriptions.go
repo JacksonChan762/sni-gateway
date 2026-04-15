@@ -10,11 +10,12 @@ import (
 )
 
 type SubscriptionHandler struct {
-	manager *services.SubscriptionManager
+	manager   *services.SubscriptionManager
+	generator *services.ConfigGenerator
 }
 
-func NewSubscriptionHandler(mgr *services.SubscriptionManager) *SubscriptionHandler {
-	return &SubscriptionHandler{manager: mgr}
+func NewSubscriptionHandler(mgr *services.SubscriptionManager, gen *services.ConfigGenerator) *SubscriptionHandler {
+	return &SubscriptionHandler{manager: mgr, generator: gen}
 }
 
 func (h *SubscriptionHandler) List(c *fiber.Ctx) error {
@@ -72,6 +73,9 @@ func (h *SubscriptionHandler) Create(c *fiber.Ctx) error {
 	db.DB.Preload("Exit").First(&sub, sub.ID)
 
 	if sub.Enabled {
+		if err := h.manager.SyncSubscription(sub.ID); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
 		h.manager.Schedule(sub)
 	}
 	return c.Status(201).JSON(sub)
@@ -110,9 +114,20 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 	}
 
 	if sub.Enabled {
+		if err := h.manager.SyncSubscription(sub.ID); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
 		h.manager.Schedule(sub)
 	} else {
 		h.manager.Unschedule(sub.ID)
+		if err := db.DB.Where("source = 'subscription' AND sub_id = ?", sub.ID).Delete(&models.Rule{}).Error; err != nil {
+			return err
+		}
+		if h.generator != nil {
+			if err := h.generator.WriteAndReload(""); err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+			}
+		}
 	}
 
 	db.DB.Preload("Exit").First(&sub, sub.ID)
@@ -129,10 +144,17 @@ func (h *SubscriptionHandler) Delete(c *fiber.Ctx) error {
 	h.manager.Unschedule(sub.ID)
 
 	// Delete associated rules
-	db.DB.Where("source = 'subscription' AND sub_id = ?", sub.ID).Delete(&models.Rule{})
+	if err := db.DB.Where("source = 'subscription' AND sub_id = ?", sub.ID).Delete(&models.Rule{}).Error; err != nil {
+		return err
+	}
 
 	if err := db.DB.Delete(&sub).Error; err != nil {
 		return err
+	}
+	if h.generator != nil {
+		if err := h.generator.WriteAndReload(""); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
 	}
 	return c.JSON(fiber.Map{"message": "deleted"})
 }

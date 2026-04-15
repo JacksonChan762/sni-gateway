@@ -39,13 +39,13 @@ func main() {
 	}
 
 	exitMgr := services.NewExitManager(dockerClient)
-	subMgr := services.NewSubscriptionManager()
 
 	var reloader services.NginxReloader
 	if dockerClient != nil {
 		reloader = dockerClient
 	}
 	cfgGen := services.NewConfigGenerator(cfg.NginxConfigDir, cfg.NginxPID, reloader)
+	subMgr := services.NewSubscriptionManager(cfgGen)
 
 	// Write initial sni_map.conf so nginx can start successfully
 	if err := cfgGen.WriteInitial(); err != nil {

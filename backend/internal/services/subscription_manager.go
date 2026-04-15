@@ -14,14 +14,16 @@ import (
 )
 
 type SubscriptionManager struct {
-	cron    *cron.Cron
-	entries map[uint]cron.EntryID
+	cron      *cron.Cron
+	entries   map[uint]cron.EntryID
+	configGen *ConfigGenerator
 }
 
-func NewSubscriptionManager() *SubscriptionManager {
+func NewSubscriptionManager(configGen *ConfigGenerator) *SubscriptionManager {
 	return &SubscriptionManager{
-		cron:    cron.New(),
-		entries: make(map[uint]cron.EntryID),
+		cron:      cron.New(),
+		entries:   make(map[uint]cron.EntryID),
+		configGen: configGen,
 	}
 }
 
@@ -108,15 +110,22 @@ func (sm *SubscriptionManager) SyncSubscription(subID uint) error {
 	// Insert new rules
 	for _, pr := range parsed {
 		rule := models.Rule{
-			Pattern: pr.Pattern,
-			Type:    pr.Type,
-			ExitID:  sub.ExitID,
-			Source:  "subscription",
-			SubID:   &sub.ID,
-			Enabled: true,
+			Pattern:  pr.Pattern,
+			Type:     pr.Type,
+			ExitID:   sub.ExitID,
+			Source:   "subscription",
+			SubID:    &sub.ID,
+			Enabled:  true,
 			Priority: 50, // subscription rules have lower priority than manual
 		}
 		db.DB.Create(&rule)
+	}
+
+	if sm.configGen != nil {
+		if err := sm.configGen.WriteAndReload(""); err != nil {
+			sm.updateSyncStatus(&sub, "failed", fmt.Sprintf("publish failed: %v", err), len(parsed))
+			return err
+		}
 	}
 
 	sm.updateSyncStatus(&sub, "success", "", len(parsed))

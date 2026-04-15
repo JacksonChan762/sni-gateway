@@ -38,7 +38,7 @@ func NewServer(exitMgr *services.ExitManager, subMgr *services.SubscriptionManag
 		app:     app,
 		exits:   NewExitHandler(exitMgr),
 		rules:   NewRuleHandler(),
-		subs:    NewSubscriptionHandler(subMgr),
+		subs:    NewSubscriptionHandler(subMgr, cfgGen),
 		publish: NewPublishHandler(cfgGen),
 	}
 
