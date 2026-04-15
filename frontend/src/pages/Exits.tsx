@@ -7,7 +7,7 @@ import {
 import { type Exit } from '../api/client'
 import {
   Plus, Play, Square, RotateCcw, Trash2, Terminal,
-  Globe, X, Pencil, Wifi, Shield,
+  Globe, X, Pencil, Wifi, Shield, Copy,
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/ConfirmModal'
@@ -163,9 +163,14 @@ export default function Exits() {
     onError: err => toast.error(getApiError(err)),
   })
   const updateMut = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { config_yaml: string; enabled: boolean } }) =>
+    mutationFn: ({ id, data }: { id: number; data: { name: string; config_yaml: string; enabled: boolean } }) =>
       updateExit(id, data),
-    onSuccess: async () => { await invalidate(); setEditExit(null); toast.success('Exit updated') },
+    onSuccess: async (_, vars) => {
+      qc.removeQueries({ queryKey: ['exit-config', vars.id] })
+      await invalidate()
+      setEditExit(null)
+      toast.success('Exit updated')
+    },
     onError: err => toast.error(getApiError(err)),
   })
   const deleteMut = useMutation({
@@ -211,6 +216,30 @@ export default function Exits() {
     })
     if (ok) deleteMut.mutate(exit.id)
   }
+
+  const uniqueCopyName = (name: string) => {
+    const existing = new Set(exits.map(exit => exit.name))
+    let candidate = `${name}-copy`
+    let suffix = 2
+    while (existing.has(candidate)) {
+      candidate = `${name}-copy-${suffix}`
+      suffix += 1
+    }
+    return candidate
+  }
+
+  const copyMut = useMutation({
+    mutationFn: async (exit: Exit) => {
+      const config = await getExitConfig(exit.id)
+      return createExit({
+        name: uniqueCopyName(exit.name),
+        enabled: false,
+        config_yaml: buildComposeYaml(false, extractEnvironmentBlock(config.config_yaml)),
+      })
+    },
+    onSuccess: async () => { await invalidate(); toast.success('Exit copied') },
+    onError: err => toast.error(getApiError(err)),
+  })
 
   return (
     <div className="space-y-6">
@@ -259,6 +288,7 @@ export default function Exits() {
               onStop={() => stopMut.mutate(exit.id)}
               onRestart={() => restartMut.mutate(exit.id)}
               onEdit={() => setEditExit(exit)}
+              onCopy={() => copyMut.mutate(exit)}
               onDelete={() => handleDelete(exit)}
               onLogs={() => handleLogs(exit)}
             />
@@ -305,13 +335,14 @@ export default function Exits() {
 // ─── Exit Card ────────────────────────────────────────────────────────────────
 
 function ExitCard({
-  exit, onStart, onStop, onRestart, onEdit, onDelete, onLogs,
+  exit, onStart, onStop, onRestart, onEdit, onCopy, onDelete, onLogs,
 }: {
   exit: Exit
   onStart: () => void
   onStop: () => void
   onRestart: () => void
   onEdit: () => void
+  onCopy: () => void
   onDelete: () => void
   onLogs: () => void
 }) {
@@ -362,6 +393,9 @@ function ExitCard({
           </button>
           <button className="btn-ghost text-xs" onClick={onEdit}>
             <Pencil size={12} /> Edit
+          </button>
+          <button className="btn-ghost text-xs" onClick={onCopy}>
+            <Copy size={12} /> Copy
           </button>
           <button className="btn-ghost text-xs" onClick={onLogs}>
             <Terminal size={12} /> Logs

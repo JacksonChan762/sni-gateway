@@ -125,6 +125,8 @@ export const getExitStatus = (id: number) =>
 
 export const getRules = () => api.get<Rule[]>('/rules').then(r => r.data)
 export const createRule = (data: Partial<Rule>) => api.post<Rule>('/rules', data).then(r => r.data)
+export const createRulesBulk = (rules: Partial<Rule>[]) =>
+  api.post<{ created_count: number; rules: Rule[] }>('/rules/bulk', { rules }).then(r => r.data)
 export const updateRule = (id: number, data: Partial<Rule>) =>
   api.put<Rule>(`/rules/${id}`, data).then(r => r.data)
 export const deleteRule = (id: number) => api.delete(`/rules/${id}`).then(r => r.data)

@@ -69,6 +69,7 @@ func (s *Server) registerRoutes() {
 	// Rules
 	api.Get("/rules", s.rules.List)
 	api.Post("/rules", s.rules.Create)
+	api.Post("/rules/bulk", s.rules.CreateBulk)
 	api.Put("/rules/:id", s.rules.Update)
 	api.Delete("/rules/:id", s.rules.Delete)
 

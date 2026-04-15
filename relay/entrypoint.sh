@@ -1,23 +1,34 @@
 #!/bin/sh
 set -e
 
-# Build nginx stream config from env — nginx itself reads SNI from the TLS
-# ClientHello and connects to SNI_HOST:443 through gluetun's VPN namespace.
+# Build nginx stream config from env. The relay runs inside gluetun's network
+# namespace and uses gluetun's local DNS to avoid public-DNS round trips.
 cat > /etc/nginx/nginx.conf <<EOF
-events {}
+worker_processes auto;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 4096;
+    multi_accept on;
+    use epoll;
+}
 
 stream {
-    server {
-        listen ${RELAY_PORT};
-        ssl_preread on;
+    access_log off;
+    resolver ${RELAY_RESOLVER:-127.0.0.1} valid=${RELAY_DNS_VALID:-300s} ipv6=off;
+    resolver_timeout ${RELAY_RESOLVER_TIMEOUT:-2s};
 
-        # DNS resolver inside gluetun's VPN namespace
-        resolver 8.8.8.8 1.1.1.1 valid=30s ipv6=off;
+    server {
+        listen ${RELAY_PORT} reuseport;
+        ssl_preread on;
+        preread_buffer_size 4k;
 
         proxy_pass \$ssl_preread_server_name:443;
-        proxy_connect_timeout 10s;
+        proxy_connect_timeout ${RELAY_CONNECT_TIMEOUT:-5s};
         proxy_timeout 3600s;
         proxy_buffer_size 16k;
+        proxy_socket_keepalive on;
+        tcp_nodelay on;
     }
 }
 EOF

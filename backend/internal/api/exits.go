@@ -137,6 +137,7 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	if err := db.DB.First(&exit, id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "not found"})
 	}
+	before := exit
 
 	var req CreateExitRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -150,17 +151,30 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		}
 	}
 
-	if req.Protocol != "" {
+	if req.ConfigYAML != "" {
+		if req.Protocol == "" {
+			req.Protocol = "wireguard"
+		}
+		if req.Provider == "" {
+			req.Provider = "protonvpn"
+		}
 		exit.Protocol = req.Protocol
-	}
-	if req.Provider != "" {
 		exit.Provider = req.Provider
-	}
-	if req.Country != "" {
 		exit.Country = req.Country
-	}
-	if req.City != "" {
 		exit.City = req.City
+	} else {
+		if req.Protocol != "" {
+			exit.Protocol = req.Protocol
+		}
+		if req.Provider != "" {
+			exit.Provider = req.Provider
+		}
+		if req.Country != "" {
+			exit.Country = req.Country
+		}
+		if req.City != "" {
+			exit.City = req.City
+		}
 	}
 	if req.Enabled != nil {
 		exit.Enabled = *req.Enabled
@@ -196,6 +210,13 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	if err := db.DB.Save(&exit).Error; err != nil {
 		return err
 	}
+
+	if err := h.manager.ReconcileAfterUpdate(&before, &exit); err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"error": fmt.Sprintf("exit updated but failed to apply runtime changes: %v", err),
+		})
+	}
+
 	exit.ConfigJSON = ""
 	return c.JSON(exit)
 }
