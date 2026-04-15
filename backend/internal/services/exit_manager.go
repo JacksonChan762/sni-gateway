@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
@@ -19,16 +20,30 @@ func NewExitManager(dockerClient *docker.Client) *ExitManager {
 	return &ExitManager{docker: dockerClient}
 }
 
+func (em *ExitManager) ensureDockerAvailable() error {
+	if em == nil || em.docker == nil {
+		return errors.New("docker client unavailable; exit runtime management is disabled")
+	}
+	return nil
+}
+
 func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
+	if err := em.ensureDockerAvailable(); err != nil {
+		em.updateStatus(exit, "unhealthy")
+		em.logEvent(exit.ID, "create", "failed", err.Error())
+		return err
+	}
+
 	ctx := context.Background()
 	em.logEvent(exit.ID, "create", "started", "")
 
 	gluetunCfg := docker.GluetunConfig{
-		Name:     exit.Name,
-		Protocol: exit.Protocol,
-		Provider: exit.Provider,
-		Country:  exit.Country,
-		City:     exit.City,
+		Name:      exit.Name,
+		Protocol:  exit.Protocol,
+		Provider:  exit.Provider,
+		Country:   exit.Country,
+		City:      exit.City,
+		RelayPort: 10000 + int(exit.ID),
 	}
 
 	if exit.ConfigJSON != "" {
@@ -58,6 +73,7 @@ func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 		ListenPort: 10000 + int(exit.ID),
 	}
 	if err := em.docker.CreateRelayContainer(ctx, relayCfg); err != nil {
+		_ = em.docker.RemoveContainer(ctx, "gluetun-"+exit.Name, true)
 		em.updateStatus(exit, "unhealthy")
 		em.logEvent(exit.ID, "create", "failed", err.Error())
 		return fmt.Errorf("create relay: %w", err)
@@ -78,14 +94,68 @@ func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 }
 
 func (em *ExitManager) Start(exit *models.Exit) error {
-	ctx := context.Background()
-	em.logEvent(exit.ID, "start", "started", "")
-
-	if err := em.docker.StartContainer(ctx, "gluetun-"+exit.Name); err != nil {
+	if err := em.ensureDockerAvailable(); err != nil {
 		em.logEvent(exit.ID, "start", "failed", err.Error())
 		return err
 	}
-	if err := em.docker.StartContainer(ctx, "relay-"+exit.Name); err != nil {
+
+	ctx := context.Background()
+	em.logEvent(exit.ID, "start", "started", "")
+
+	gluetunName := "gluetun-" + exit.Name
+	relayName := "relay-" + exit.Name
+	relayPort := 10000 + int(exit.ID)
+
+	needsUpgrade, err := em.docker.GluetunNeedsUpgrade(ctx, exit.Name, relayPort)
+	if err != nil {
+		em.logEvent(exit.ID, "start", "failed", err.Error())
+		return err
+	}
+	if needsUpgrade {
+		_ = em.docker.RemoveContainer(ctx, relayName, true)
+		_ = em.docker.RemoveContainer(ctx, gluetunName, true)
+		if err := em.CreateAndStart(exit); err != nil {
+			em.logEvent(exit.ID, "start", "failed", err.Error())
+			return err
+		}
+		em.logEvent(exit.ID, "start", "success", "runtime upgraded")
+		return nil
+	}
+
+	gStatus, err := em.docker.GetContainerStatus(ctx, gluetunName)
+	if err != nil {
+		em.logEvent(exit.ID, "start", "failed", err.Error())
+		return err
+	}
+	if gStatus == "not_found" {
+		if err := em.CreateAndStart(exit); err != nil {
+			em.logEvent(exit.ID, "start", "failed", err.Error())
+			return err
+		}
+		em.logEvent(exit.ID, "start", "success", "runtime recreated")
+		return nil
+	}
+
+	if err := em.docker.StartContainer(ctx, gluetunName); err != nil {
+		em.logEvent(exit.ID, "start", "failed", err.Error())
+		return err
+	}
+
+	rStatus, err := em.docker.GetContainerStatus(ctx, relayName)
+	if err != nil {
+		em.logEvent(exit.ID, "start", "failed", err.Error())
+		return err
+	}
+	if rStatus == "not_found" {
+		relayCfg := docker.RelayConfig{
+			Name:       exit.Name,
+			ListenPort: relayPort,
+		}
+		if err := em.docker.CreateRelayContainer(ctx, relayCfg); err != nil {
+			em.logEvent(exit.ID, "start", "failed", err.Error())
+			return err
+		}
+	} else if err := em.docker.StartContainer(ctx, relayName); err != nil {
 		em.logEvent(exit.ID, "start", "failed", err.Error())
 		return err
 	}
@@ -96,6 +166,11 @@ func (em *ExitManager) Start(exit *models.Exit) error {
 }
 
 func (em *ExitManager) Stop(exit *models.Exit) error {
+	if err := em.ensureDockerAvailable(); err != nil {
+		em.logEvent(exit.ID, "stop", "failed", err.Error())
+		return err
+	}
+
 	ctx := context.Background()
 	em.logEvent(exit.ID, "stop", "started", "")
 
@@ -111,8 +186,30 @@ func (em *ExitManager) Stop(exit *models.Exit) error {
 }
 
 func (em *ExitManager) Restart(exit *models.Exit) error {
+	if err := em.ensureDockerAvailable(); err != nil {
+		em.logEvent(exit.ID, "restart", "failed", err.Error())
+		return err
+	}
+
 	ctx := context.Background()
 	em.logEvent(exit.ID, "restart", "started", "")
+
+	relayPort := 10000 + int(exit.ID)
+	needsUpgrade, err := em.docker.GluetunNeedsUpgrade(ctx, exit.Name, relayPort)
+	if err != nil {
+		em.logEvent(exit.ID, "restart", "failed", err.Error())
+		return err
+	}
+	if needsUpgrade {
+		_ = em.docker.RemoveContainer(ctx, "relay-"+exit.Name, true)
+		_ = em.docker.RemoveContainer(ctx, "gluetun-"+exit.Name, true)
+		if err := em.CreateAndStart(exit); err != nil {
+			em.logEvent(exit.ID, "restart", "failed", err.Error())
+			return err
+		}
+		em.logEvent(exit.ID, "restart", "success", "runtime upgraded")
+		return nil
+	}
 
 	_ = em.docker.RestartContainer(ctx, "relay-"+exit.Name)
 	if err := em.docker.RestartContainer(ctx, "gluetun-"+exit.Name); err != nil {
@@ -126,6 +223,11 @@ func (em *ExitManager) Restart(exit *models.Exit) error {
 }
 
 func (em *ExitManager) Delete(exit *models.Exit) error {
+	if err := em.ensureDockerAvailable(); err != nil {
+		em.logEvent(exit.ID, "delete", "failed", err.Error())
+		return err
+	}
+
 	ctx := context.Background()
 	em.logEvent(exit.ID, "delete", "started", "")
 
@@ -137,6 +239,10 @@ func (em *ExitManager) Delete(exit *models.Exit) error {
 }
 
 func (em *ExitManager) GetStatus(exit *models.Exit) (string, string, error) {
+	if err := em.ensureDockerAvailable(); err != nil {
+		return "unavailable", "", err
+	}
+
 	ctx := context.Background()
 
 	gStatus, err := em.docker.GetContainerStatus(ctx, "gluetun-"+exit.Name)
@@ -162,6 +268,10 @@ func (em *ExitManager) GetStatus(exit *models.Exit) (string, string, error) {
 }
 
 func (em *ExitManager) GetLogs(exit *models.Exit, tail int) (string, error) {
+	if err := em.ensureDockerAvailable(); err != nil {
+		return "", err
+	}
+
 	ctx := context.Background()
 	return em.docker.GetContainerLogs(ctx, "gluetun-"+exit.Name, tail)
 }

@@ -2,12 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/models"
 	"sni-gateway/internal/services"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 )
 
 type ExitHandler struct {
@@ -41,6 +45,7 @@ type CreateExitRequest struct {
 	WireguardAddresses string `json:"wireguard_addresses"`
 	OpenVPNUser        string `json:"openvpn_user"`
 	OpenVPNPassword    string `json:"openvpn_password"`
+	ConfigYAML         string `json:"config_yaml"`
 	Enabled            *bool  `json:"enabled"`
 }
 
@@ -49,8 +54,37 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Runtime = strings.TrimSpace(req.Runtime)
+	req.Protocol = strings.TrimSpace(req.Protocol)
+	req.Provider = strings.TrimSpace(req.Provider)
+	req.Country = strings.TrimSpace(req.Country)
+	req.City = strings.TrimSpace(req.City)
+	req.ConfigYAML = strings.TrimSpace(req.ConfigYAML)
+
+	if req.ConfigYAML != "" {
+		if err := applyYAMLToExitRequest(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+	}
+
 	if req.Name == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	if req.Protocol == "" {
+		req.Protocol = "wireguard"
+	}
+	if req.Provider == "" {
+		req.Provider = "protonvpn"
+	}
+	if req.Protocol != "wireguard" && req.Protocol != "openvpn" {
+		return c.Status(400).JSON(fiber.Map{"error": "protocol must be wireguard or openvpn"})
+	}
+	if req.Protocol == "wireguard" && req.WireguardPrivKey == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "wireguard_private_key is required for wireguard exits"})
+	}
+	if req.Protocol == "openvpn" && (req.OpenVPNUser == "" || req.OpenVPNPassword == "") {
+		return c.Status(400).JSON(fiber.Map{"error": "openvpn_user and openvpn_password are required for openvpn exits"})
 	}
 
 	enabled := true
@@ -62,21 +96,10 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 		runtime = "gluetun"
 	}
 
-	// Store credentials in config_json
-	creds := map[string]string{}
-	if req.WireguardPrivKey != "" {
-		creds["wireguard_private_key"] = req.WireguardPrivKey
+	configJSON, err := buildExitConfigJSON(req)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
-	if req.WireguardAddresses != "" {
-		creds["wireguard_addresses"] = req.WireguardAddresses
-	}
-	if req.OpenVPNUser != "" {
-		creds["openvpn_user"] = req.OpenVPNUser
-	}
-	if req.OpenVPNPassword != "" {
-		creds["openvpn_password"] = req.OpenVPNPassword
-	}
-	credsJSON, _ := json.Marshal(creds)
 
 	exit := models.Exit{
 		Name:       req.Name,
@@ -87,18 +110,20 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 		City:       req.City,
 		Enabled:    enabled,
 		Status:     "stopped",
-		ConfigJSON: string(credsJSON),
+		ConfigJSON: configJSON,
 	}
 	if err := db.DB.Create(&exit).Error; err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Fire off container creation
-	go func() {
+	if enabled {
 		if err := h.manager.CreateAndStart(&exit); err != nil {
-			// Status already updated by manager
+			db.DB.Delete(&exit)
+			return c.Status(500).JSON(fiber.Map{
+				"error": fmt.Sprintf("failed to create exit runtime: %v", err),
+			})
 		}
-	}()
+	}
 
 	exit.ConfigJSON = ""
 	return c.Status(201).JSON(exit)
@@ -114,6 +139,13 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	var req CreateExitRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	req.ConfigYAML = strings.TrimSpace(req.ConfigYAML)
+
+	if req.ConfigYAML != "" {
+		if err := applyYAMLToExitRequest(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
 	}
 
 	if req.Protocol != "" {
@@ -132,11 +164,290 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		exit.Enabled = *req.Enabled
 	}
 
+	if req.ConfigYAML != "" {
+		configJSON, err := buildExitConfigJSON(req)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		exit.ConfigJSON = configJSON
+	} else {
+		creds := parseExitCredentials(exit.ConfigJSON)
+		if req.WireguardPrivKey != "" {
+			creds["wireguard_private_key"] = req.WireguardPrivKey
+		}
+		if req.WireguardAddresses != "" {
+			creds["wireguard_addresses"] = req.WireguardAddresses
+		}
+		if req.OpenVPNUser != "" {
+			creds["openvpn_user"] = req.OpenVPNUser
+		}
+		if req.OpenVPNPassword != "" {
+			creds["openvpn_password"] = req.OpenVPNPassword
+		}
+		if len(creds) > 0 {
+			if raw, err := json.Marshal(creds); err == nil {
+				exit.ConfigJSON = string(raw)
+			}
+		}
+	}
+
 	if err := db.DB.Save(&exit).Error; err != nil {
 		return err
 	}
 	exit.ConfigJSON = ""
 	return c.JSON(exit)
+}
+
+func (h *ExitHandler) Config(c *fiber.Ctx) error {
+	exit := h.getExit(c)
+	if exit == nil {
+		return c.Status(404).JSON(fiber.Map{"error": "not found"})
+	}
+
+	configYAML, err := buildExitConfigYAML(exit)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"config_yaml": configYAML})
+}
+
+func parseExitCredentials(raw string) map[string]string {
+	result := make(map[string]string)
+	if raw == "" {
+		return result
+	}
+	_ = json.Unmarshal([]byte(raw), &result)
+	return result
+}
+
+func applyYAMLToExitRequest(req *CreateExitRequest) error {
+	raw := make(map[string]interface{})
+	if err := yaml.Unmarshal([]byte(req.ConfigYAML), &raw); err != nil {
+		return fmt.Errorf("invalid yaml: %w", err)
+	}
+
+	if applyComposeStyleConfig(raw, req) {
+		return nil
+	}
+
+	getString := func(key string) string {
+		if v, ok := raw[key]; ok {
+			return strings.TrimSpace(fmt.Sprint(v))
+		}
+		return ""
+	}
+
+	if v := getString("runtime"); v != "" {
+		req.Runtime = v
+	}
+	if v := getString("protocol"); v != "" {
+		req.Protocol = v
+	}
+	if v := getString("provider"); v != "" {
+		req.Provider = v
+	}
+	if v := getString("country"); v != "" {
+		req.Country = v
+	}
+	if v := getString("city"); v != "" {
+		req.City = v
+	}
+	if v := getString("wireguard_private_key"); v != "" {
+		req.WireguardPrivKey = v
+	}
+	if v := getString("wireguard_addresses"); v != "" {
+		req.WireguardAddresses = v
+	}
+	if v := getString("openvpn_user"); v != "" {
+		req.OpenVPNUser = v
+	}
+	if v := getString("openvpn_password"); v != "" {
+		req.OpenVPNPassword = v
+	}
+	if enabled, ok := raw["enabled"].(bool); ok {
+		req.Enabled = &enabled
+	}
+
+	return nil
+}
+
+func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest) bool {
+	services, ok := raw["services"].(map[string]interface{})
+	if !ok || len(services) == 0 {
+		return false
+	}
+
+	var service map[string]interface{}
+	if gluetun, ok := services["gluetun"].(map[string]interface{}); ok {
+		service = gluetun
+	} else {
+		for _, candidate := range services {
+			if asMap, ok := candidate.(map[string]interface{}); ok {
+				service = asMap
+				break
+			}
+		}
+	}
+	if service == nil {
+		return false
+	}
+
+	req.Runtime = "gluetun"
+
+	if enabled, ok := raw["enabled"].(bool); ok {
+		req.Enabled = &enabled
+	} else if enabled, ok := service["enabled"].(bool); ok {
+		req.Enabled = &enabled
+	}
+
+	env := normalizeEnvironment(service["environment"])
+	if len(env) == 0 {
+		return true
+	}
+
+	if v := env["VPN_TYPE"]; v != "" {
+		req.Protocol = v
+	}
+	if v := env["VPN_SERVICE_PROVIDER"]; v != "" {
+		req.Provider = v
+	}
+	if v := env["SERVER_COUNTRIES"]; v != "" {
+		req.Country = v
+	}
+	if v := env["SERVER_CITIES"]; v != "" {
+		req.City = v
+	}
+	if v := env["WIREGUARD_PRIVATE_KEY"]; v != "" {
+		req.WireguardPrivKey = v
+	}
+	if v := env["WIREGUARD_ADDRESSES"]; v != "" {
+		req.WireguardAddresses = v
+	}
+	if v := env["OPENVPN_USER"]; v != "" {
+		req.OpenVPNUser = v
+	}
+	if v := env["OPENVPN_PASSWORD"]; v != "" {
+		req.OpenVPNPassword = v
+	}
+
+	return true
+}
+
+func normalizeEnvironment(raw interface{}) map[string]string {
+	result := make(map[string]string)
+
+	switch env := raw.(type) {
+	case map[string]interface{}:
+		for key, value := range env {
+			result[key] = strings.TrimSpace(fmt.Sprint(value))
+		}
+	case []interface{}:
+		for _, item := range env {
+			kv := strings.TrimSpace(fmt.Sprint(item))
+			key, value, ok := strings.Cut(kv, "=")
+			if ok {
+				result[strings.TrimSpace(key)] = strings.TrimSpace(value)
+			}
+		}
+	}
+
+	return result
+}
+
+func buildExitConfigJSON(req CreateExitRequest) (string, error) {
+	raw := map[string]interface{}{}
+	if req.ConfigYAML != "" {
+		if err := yaml.Unmarshal([]byte(req.ConfigYAML), &raw); err != nil {
+			return "", fmt.Errorf("invalid yaml: %w", err)
+		}
+	}
+
+	delete(raw, "name")
+	if req.Runtime != "" {
+		raw["runtime"] = req.Runtime
+	}
+	if req.Protocol != "" {
+		raw["protocol"] = req.Protocol
+	}
+	if req.Provider != "" {
+		raw["provider"] = req.Provider
+	}
+	if req.Country != "" {
+		raw["country"] = req.Country
+	}
+	if req.City != "" {
+		raw["city"] = req.City
+	}
+	if req.Enabled != nil {
+		raw["enabled"] = *req.Enabled
+	}
+	if req.WireguardPrivKey != "" {
+		raw["wireguard_private_key"] = req.WireguardPrivKey
+	}
+	if req.WireguardAddresses != "" {
+		raw["wireguard_addresses"] = req.WireguardAddresses
+	}
+	if req.OpenVPNUser != "" {
+		raw["openvpn_user"] = req.OpenVPNUser
+	}
+	if req.OpenVPNPassword != "" {
+		raw["openvpn_password"] = req.OpenVPNPassword
+	}
+
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func buildExitConfigYAML(exit *models.Exit) (string, error) {
+	raw := map[string]interface{}{}
+	if exit.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(exit.ConfigJSON), &raw); err != nil {
+			return "", err
+		}
+	}
+
+	env := []string{
+		fmt.Sprintf("VPN_SERVICE_PROVIDER=%s", exit.Provider),
+		fmt.Sprintf("VPN_TYPE=%s", exit.Protocol),
+		fmt.Sprintf("SERVER_COUNTRIES=%s", exit.Country),
+	}
+	if exit.City != "" {
+		env = append(env, fmt.Sprintf("SERVER_CITIES=%s", exit.City))
+	} else {
+		env = append(env, "SERVER_CITIES=")
+	}
+	if value, ok := raw["wireguard_private_key"]; ok && fmt.Sprint(value) != "" {
+		env = append(env, fmt.Sprintf("WIREGUARD_PRIVATE_KEY=%v", value))
+	}
+	if value, ok := raw["wireguard_addresses"]; ok && fmt.Sprint(value) != "" {
+		env = append(env, fmt.Sprintf("WIREGUARD_ADDRESSES=%v", value))
+	}
+	if value, ok := raw["openvpn_user"]; ok && fmt.Sprint(value) != "" {
+		env = append(env, fmt.Sprintf("OPENVPN_USER=%v", value))
+	}
+	if value, ok := raw["openvpn_password"]; ok && fmt.Sprint(value) != "" {
+		env = append(env, fmt.Sprintf("OPENVPN_PASSWORD=%v", value))
+	}
+
+	compose := map[string]interface{}{
+		"enabled": exit.Enabled,
+		"services": map[string]interface{}{
+			"gluetun": map[string]interface{}{
+				"image":       "qmcgaw/gluetun:latest",
+				"environment": env,
+			},
+		},
+	}
+
+	encoded, err := yaml.Marshal(compose)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func (h *ExitHandler) Delete(c *fiber.Ctx) error {
@@ -151,13 +462,27 @@ func (h *ExitHandler) Delete(c *fiber.Ctx) error {
 	db.DB.Model(&models.Rule{}).Where("exit_id = ? AND enabled = true", id).Count(&count)
 	if count > 0 {
 		return c.Status(400).JSON(fiber.Map{
-			"error": "cannot delete exit with active rules",
+			"error":      "cannot delete exit with active rules",
 			"rule_count": count,
 		})
 	}
 
-	_ = h.manager.Delete(&exit)
-	db.DB.Delete(&exit)
+	if err := h.manager.Delete(&exit); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("exit_id = ?", exit.ID).Delete(&models.ExitRuntimeEvent{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&exit).Error; err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
 	return c.JSON(fiber.Map{"message": "deleted"})
 }
 

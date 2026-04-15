@@ -71,6 +71,7 @@ func (s *Server) registerRoutes() {
 	api.Post("/exits/:id/stop", s.exits.Stop)
 	api.Post("/exits/:id/restart", s.exits.Restart)
 	api.Post("/exits/:id/test", s.exits.Test)
+	api.Get("/exits/:id/config", s.exits.Config)
 	api.Get("/exits/:id/logs", s.exits.Logs)
 	api.Get("/exits/:id/status", s.exits.Status)
 

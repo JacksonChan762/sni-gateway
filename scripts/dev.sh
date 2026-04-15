@@ -3,6 +3,9 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+echo "==> Building relay image..."
+docker build -t sni-gateway-relay:latest ./relay
+
 # Start postgres
 docker compose up -d postgres
 

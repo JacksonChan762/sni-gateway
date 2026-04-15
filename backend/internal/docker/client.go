@@ -12,13 +12,28 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/docker/docker/pkg/stdcopy"
 )
 
 const VPNNetwork = "vpn-net"
 
 type Client struct {
 	cli *client.Client
+}
+
+func (c *Client) ensureImage(ctx context.Context, imageRef string) error {
+	if _, _, err := c.cli.ImageInspectWithRaw(ctx, imageRef); err == nil {
+		return nil
+	}
+
+	rc, err := c.cli.ImagePull(ctx, imageRef, types.ImagePullOptions{})
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	_, err = io.Copy(io.Discard, rc)
+	return err
 }
 
 func NewClient(socketPath string) (*Client, error) {
@@ -38,6 +53,7 @@ type GluetunConfig struct {
 	Provider        string
 	Country         string
 	City            string
+	RelayPort       int
 	WireguardKey    string
 	WireguardPubKey string
 	WireguardAddr   string
@@ -52,6 +68,7 @@ type RelayConfig struct {
 
 func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) error {
 	containerName := "gluetun-" + cfg.Name
+	imageRef := "qmcgaw/gluetun:latest"
 
 	env := []string{
 		"VPN_SERVICE_PROVIDER=" + cfg.Provider,
@@ -77,18 +94,24 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 	if cfg.City != "" {
 		env = append(env, "SERVER_CITIES="+cfg.City)
 	}
+	if cfg.RelayPort > 0 {
+		env = append(env, "FIREWALL_INPUT_PORTS="+fmt.Sprintf("%d", cfg.RelayPort))
+	}
 
 	_ = c.RemoveContainer(ctx, containerName, true)
+	if err := c.ensureImage(ctx, imageRef); err != nil {
+		return fmt.Errorf("ensure gluetun image: %w", err)
+	}
 
 	resp, err := c.cli.ContainerCreate(ctx,
 		&container.Config{
-			Image: "qmcgaw/gluetun:latest",
+			Image: imageRef,
 			Env:   env,
 		},
 		&container.HostConfig{
 			CapAdd:        []string{"NET_ADMIN"},
 			Sysctls:       map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"},
-			NetworkMode:   container.NetworkMode("bridge"),
+			NetworkMode:   container.NetworkMode(VPNNetwork),
 			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
 		},
 		&network.NetworkingConfig{},
@@ -103,19 +126,18 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 		return err
 	}
 
-	// Connect gluetun to vpn-net so nginx can route to it
-	if err := c.cli.NetworkConnect(ctx, VPNNetwork, resp.ID, &network.EndpointSettings{}); err != nil {
-		return fmt.Errorf("connect gluetun to %s: %w", VPNNetwork, err)
-	}
-
 	return nil
 }
 
 func (c *Client) CreateRelayContainer(ctx context.Context, cfg RelayConfig) error {
 	containerName := "relay-" + cfg.Name
 	port := fmt.Sprintf("%d", cfg.ListenPort)
+	imageRef := "sni-gateway-relay:latest"
 
 	_ = c.RemoveContainer(ctx, containerName, true)
+	if err := c.ensureImage(ctx, imageRef); err != nil {
+		return fmt.Errorf("ensure relay image: %w", err)
+	}
 
 	// Relay shares gluetun's network namespace so all its outbound connections
 	// are routed through the VPN tunnel. The relay image is a nginx stream proxy
@@ -124,11 +146,8 @@ func (c *Client) CreateRelayContainer(ctx context.Context, cfg RelayConfig) erro
 	// Build the image with: docker build -t sni-gateway-relay:latest ./relay
 	resp, err := c.cli.ContainerCreate(ctx,
 		&container.Config{
-			Image: "sni-gateway-relay:latest",
+			Image: imageRef,
 			Env:   []string{"RELAY_PORT=" + port},
-			ExposedPorts: nat.PortSet{
-				nat.Port(port + "/tcp"): struct{}{},
-			},
 		},
 		&container.HostConfig{
 			NetworkMode:   container.NetworkMode("container:gluetun-" + cfg.Name),
@@ -174,6 +193,33 @@ func (c *Client) GetContainerStatus(ctx context.Context, name string) (string, e
 	return info.State.Status, nil
 }
 
+func (c *Client) GluetunNeedsUpgrade(ctx context.Context, name string, relayPort int) (bool, error) {
+	info, err := c.cli.ContainerInspect(ctx, "gluetun-"+name)
+	if err != nil {
+		if client.IsErrNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	if string(info.HostConfig.NetworkMode) != VPNNetwork {
+		return true, nil
+	}
+
+	if _, ok := info.NetworkSettings.Networks[VPNNetwork]; !ok {
+		return true, nil
+	}
+
+	expected := "FIREWALL_INPUT_PORTS=" + fmt.Sprintf("%d", relayPort)
+	for _, env := range info.Config.Env {
+		if env == expected {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
 func (c *Client) GetContainerLogs(ctx context.Context, name string, tail int) (string, error) {
 	opts := container.LogsOptions{
 		ShowStdout: true,
@@ -187,8 +233,14 @@ func (c *Client) GetContainerLogs(ctx context.Context, name string, tail int) (s
 	defer rc.Close()
 
 	buf := new(strings.Builder)
-	_, err = io.Copy(buf, rc)
-	return buf.String(), err
+	errBuf := new(strings.Builder)
+	if _, err = stdcopy.StdCopy(buf, errBuf, rc); err != nil {
+		return "", err
+	}
+	if errBuf.Len() > 0 && buf.Len() == 0 {
+		return errBuf.String(), nil
+	}
+	return buf.String(), nil
 }
 
 type ContainerInfo struct {
@@ -260,8 +312,14 @@ func (c *Client) GetPublicIP(ctx context.Context, exitName string) (string, erro
 	defer attachResp.Close()
 
 	buf := new(strings.Builder)
-	io.Copy(buf, attachResp.Reader)
+	errBuf := new(strings.Builder)
+	if _, err := stdcopy.StdCopy(buf, errBuf, attachResp.Reader); err != nil {
+		return "", err
+	}
 	output := strings.TrimSpace(buf.String())
+	if output == "" {
+		output = strings.TrimSpace(errBuf.String())
+	}
 
 	var result struct {
 		PublicIP string `json:"public_ip"`
@@ -271,4 +329,3 @@ func (c *Client) GetPublicIP(ctx context.Context, exitName string) (string, erro
 	}
 	return result.PublicIP, nil
 }
-
