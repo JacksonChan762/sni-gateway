@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react'
-import { Shield, Eye, EyeOff } from 'lucide-react'
-import { loginUser } from '../api/client'
+import { AlertCircle, Eye, EyeOff, Shield } from 'lucide-react'
+import { getApiError, loginUser } from '../api/client'
 
 interface LoginProps {
-  onLogin: (token: string, username: string) => void
+  onLogin: (token: string, username: string, expiresAt?: number) => void
 }
 
 export default function Login({ onLogin }: LoginProps) {
@@ -14,13 +14,22 @@ export default function Login({ onLogin }: LoginProps) {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
+    if (loading) return
+
+    const username = form.username.trim()
+    const password = form.password
+    if (!username || !password) {
+      setError('Username and password are required')
+      return
+    }
+
     setError('')
     setLoading(true)
     try {
-      const res = await loginUser(form.username, form.password)
-      onLogin(res.token, res.username)
-    } catch (err: any) {
-      setError(err?.response?.data?.error ?? 'Login failed. Please try again.')
+      const res = await loginUser(username, password)
+      onLogin(res.token, res.username, res.expires_at)
+    } catch (err) {
+      setError(getApiError(err) || 'Login failed. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -55,9 +64,13 @@ export default function Login({ onLogin }: LoginProps) {
                 autoComplete="username"
                 placeholder="admin"
                 value={form.username}
-                onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+                onChange={e => {
+                  setForm(f => ({ ...f, username: e.target.value }))
+                  setError('')
+                }}
                 autoFocus
                 required
+                disabled={loading}
               />
             </div>
 
@@ -70,14 +83,20 @@ export default function Login({ onLogin }: LoginProps) {
                   autoComplete="current-password"
                   placeholder="••••••••"
                   value={form.password}
-                  onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                  onChange={e => {
+                    setForm(f => ({ ...f, password: e.target.value }))
+                    setError('')
+                  }}
                   required
+                  disabled={loading}
                 />
                 <button
                   type="button"
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
                   onClick={() => setShowPassword(v => !v)}
+                  disabled={loading}
                   tabIndex={-1}
+                  title={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
@@ -86,7 +105,7 @@ export default function Login({ onLogin }: LoginProps) {
 
             {error && (
               <div className="flex items-center gap-2 text-red-400 text-sm bg-red-900/20 border border-red-800/50 px-3 py-2.5 rounded-lg">
-                <span className="flex-shrink-0">⚠</span>
+                <AlertCircle size={16} className="flex-shrink-0" />
                 {error}
               </div>
             )}
@@ -94,7 +113,7 @@ export default function Login({ onLogin }: LoginProps) {
             <button
               type="submit"
               className="btn-primary w-full justify-center py-2.5 mt-2"
-              disabled={loading || !form.username || !form.password}
+              disabled={loading || !form.username.trim() || !form.password}
             >
               {loading ? (
                 <span className="flex items-center gap-2">

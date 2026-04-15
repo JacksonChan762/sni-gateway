@@ -11,6 +11,7 @@ import Exits from './pages/Exits'
 import Publish from './pages/Publish'
 import Login from './pages/Login'
 import { ToastProvider } from './components/Toast'
+import { clearAuth, loadAuth, saveAuth, type AuthState } from './auth'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -26,40 +27,30 @@ const navItems = [
   { to: '/publish', label: 'Publish', icon: Upload },
 ]
 
-interface AuthState {
-  token: string
-  username: string
-}
-
-function loadAuth(): AuthState | null {
-  const token = localStorage.getItem('sni_token')
-  const username = localStorage.getItem('sni_username')
-  if (token && username) return { token, username }
-  return null
-}
-
 export default function App() {
   const [auth, setAuth] = useState<AuthState | null>(loadAuth)
   const [mobileOpen, setMobileOpen] = useState(false)
 
   // Listen for 401 events from the API client
   useEffect(() => {
-    const handler = () => setAuth(null)
+    const handler = () => {
+      setAuth(null)
+      setMobileOpen(false)
+      queryClient.clear()
+    }
     window.addEventListener('sni:logout', handler)
     return () => window.removeEventListener('sni:logout', handler)
   }, [])
 
-  const handleLogin = (token: string, username: string) => {
-    localStorage.setItem('sni_token', token)
-    localStorage.setItem('sni_username', username)
-    setAuth({ token, username })
+  const handleLogin = (token: string, username: string, expiresAt?: number) => {
+    setAuth(saveAuth(token, username, expiresAt))
     queryClient.clear()
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('sni_token')
-    localStorage.removeItem('sni_username')
+    clearAuth()
     setAuth(null)
+    setMobileOpen(false)
     queryClient.clear()
   }
 

@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 )
 
 type SubscriptionHandler struct {
@@ -44,11 +45,17 @@ type CreateSubRequest struct {
 
 func (h *SubscriptionHandler) Create(c *fiber.Ctx) error {
 	var req CreateSubRequest
-	if err := c.BodyParser(&req); err != nil {
+	if _, err := decodeJSONBody(c.Body(), &req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 	if req.Name == "" || req.URL == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "name and url are required"})
+	}
+	if err := ensureExitExists(db.DB, req.ExitID); err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return c.Status(400).JSON(fiber.Map{"error": "exit_id does not reference an existing exit"})
+		}
+		return err
 	}
 
 	enabled := true
@@ -89,7 +96,8 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 	}
 
 	var req CreateSubRequest
-	if err := c.BodyParser(&req); err != nil {
+	fields, err := decodeJSONBody(c.Body(), &req)
+	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
@@ -99,8 +107,20 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 	if req.URL != "" {
 		sub.URL = req.URL
 	}
-	if req.ExitID != nil {
-		sub.ExitID = req.ExitID
+	if _, ok := fields["exit_id"]; ok {
+		present, exitID, err := parseOptionalUintField(fields, "exit_id")
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		if present {
+			if err := ensureExitExists(db.DB, exitID); err != nil {
+				if err == gorm.ErrRecordNotFound {
+					return c.Status(400).JSON(fiber.Map{"error": "exit_id does not reference an existing exit"})
+				}
+				return err
+			}
+			sub.ExitID = exitID
+		}
 	}
 	if req.Enabled != nil {
 		sub.Enabled = *req.Enabled

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { clearAuth, loadAuth } from '../auth'
 
 const api = axios.create({
   baseURL: '/api',
@@ -7,9 +8,11 @@ const api = axios.create({
 
 // Attach JWT token on every request
 api.interceptors.request.use(config => {
-  const token = localStorage.getItem('sni_token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+  const auth = loadAuth()
+  if (auth) {
+    config.headers.Authorization = `Bearer ${auth.token}`
+  } else {
+    delete config.headers.Authorization
   }
   return config
 })
@@ -19,8 +22,7 @@ api.interceptors.response.use(
   r => r,
   err => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('sni_token')
-      localStorage.removeItem('sni_username')
+      clearAuth()
       window.dispatchEvent(new Event('sni:logout'))
     }
     return Promise.reject(err)
@@ -31,7 +33,7 @@ api.interceptors.response.use(
 
 export const loginUser = (username: string, password: string) =>
   axios
-    .post<{ token: string; username: string }>('/api/auth/login', { username, password })
+    .post<{ token: string; username: string; expires_at?: number }>('/api/auth/login', { username, password })
     .then(r => r.data)
 
 // ─── Types ───────────────────────────────────────────────────────────────────

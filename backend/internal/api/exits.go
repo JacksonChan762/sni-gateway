@@ -3,11 +3,13 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/models"
 	"sni-gateway/internal/services"
-	"strconv"
-	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"gopkg.in/yaml.v3"
@@ -410,35 +412,22 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 		}
 	}
 
-	env := []string{
-		fmt.Sprintf("VPN_SERVICE_PROVIDER=%s", exit.Provider),
-		fmt.Sprintf("VPN_TYPE=%s", exit.Protocol),
-		fmt.Sprintf("SERVER_COUNTRIES=%s", exit.Country),
-	}
-	if exit.City != "" {
-		env = append(env, fmt.Sprintf("SERVER_CITIES=%s", exit.City))
-	} else {
-		env = append(env, "SERVER_CITIES=")
-	}
-	if value, ok := raw["wireguard_private_key"]; ok && fmt.Sprint(value) != "" {
-		env = append(env, fmt.Sprintf("WIREGUARD_PRIVATE_KEY=%v", value))
-	}
-	if value, ok := raw["wireguard_addresses"]; ok && fmt.Sprint(value) != "" {
-		env = append(env, fmt.Sprintf("WIREGUARD_ADDRESSES=%v", value))
-	}
-	if value, ok := raw["openvpn_user"]; ok && fmt.Sprint(value) != "" {
-		env = append(env, fmt.Sprintf("OPENVPN_USER=%v", value))
-	}
-	if value, ok := raw["openvpn_password"]; ok && fmt.Sprint(value) != "" {
-		env = append(env, fmt.Sprintf("OPENVPN_PASSWORD=%v", value))
-	}
+	envMap := extractStoredComposeEnv(raw)
+	envMap["VPN_SERVICE_PROVIDER"] = exit.Provider
+	envMap["VPN_TYPE"] = exit.Protocol
+	envMap["SERVER_COUNTRIES"] = exit.Country
+	envMap["SERVER_CITIES"] = exit.City
+	copyRawString(raw, envMap, "wireguard_private_key", "WIREGUARD_PRIVATE_KEY")
+	copyRawString(raw, envMap, "wireguard_addresses", "WIREGUARD_ADDRESSES")
+	copyRawString(raw, envMap, "openvpn_user", "OPENVPN_USER")
+	copyRawString(raw, envMap, "openvpn_password", "OPENVPN_PASSWORD")
 
 	compose := map[string]interface{}{
 		"enabled": exit.Enabled,
 		"services": map[string]interface{}{
 			"gluetun": map[string]interface{}{
 				"image":       "qmcgaw/gluetun:latest",
-				"environment": env,
+				"environment": orderedEnvironment(envMap, exit.Protocol),
 			},
 		},
 	}
@@ -450,6 +439,77 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 	return string(encoded), nil
 }
 
+func extractStoredComposeEnv(raw map[string]interface{}) map[string]string {
+	services, ok := raw["services"].(map[string]interface{})
+	if !ok {
+		return map[string]string{}
+	}
+
+	var service map[string]interface{}
+	if gluetun, ok := services["gluetun"].(map[string]interface{}); ok {
+		service = gluetun
+	} else {
+		for _, candidate := range services {
+			if asMap, ok := candidate.(map[string]interface{}); ok {
+				service = asMap
+				break
+			}
+		}
+	}
+	if service == nil {
+		return map[string]string{}
+	}
+
+	return normalizeEnvironment(service["environment"])
+}
+
+func copyRawString(raw map[string]interface{}, env map[string]string, rawKey, envKey string) {
+	if value, ok := raw[rawKey]; ok && fmt.Sprint(value) != "" {
+		env[envKey] = fmt.Sprint(value)
+	}
+}
+
+func orderedEnvironment(env map[string]string, protocol string) []string {
+	order := []string{
+		"VPN_SERVICE_PROVIDER",
+		"VPN_TYPE",
+		"SERVER_COUNTRIES",
+		"SERVER_CITIES",
+		"WIREGUARD_PRIVATE_KEY",
+		"WIREGUARD_ADDRESSES",
+	}
+	if protocol == "openvpn" {
+		order = []string{
+			"VPN_SERVICE_PROVIDER",
+			"VPN_TYPE",
+			"SERVER_COUNTRIES",
+			"SERVER_CITIES",
+			"OPENVPN_USER",
+			"OPENVPN_PASSWORD",
+		}
+	}
+
+	seen := make(map[string]bool, len(env))
+	result := make([]string, 0, len(env))
+	for _, key := range order {
+		result = append(result, fmt.Sprintf("%s=%s", key, env[key]))
+		seen[key] = true
+	}
+
+	extras := make([]string, 0, len(env))
+	for key := range env {
+		if !seen[key] {
+			extras = append(extras, key)
+		}
+	}
+	sort.Strings(extras)
+	for _, key := range extras {
+		result = append(result, fmt.Sprintf("%s=%s", key, env[key]))
+	}
+
+	return result
+}
+
 func (h *ExitHandler) Delete(c *fiber.Ctx) error {
 	id, _ := strconv.Atoi(c.Params("id"))
 	var exit models.Exit
@@ -457,13 +517,17 @@ func (h *ExitHandler) Delete(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "not found"})
 	}
 
-	// Check if rules depend on this exit
-	var count int64
-	db.DB.Model(&models.Rule{}).Where("exit_id = ? AND enabled = true", id).Count(&count)
-	if count > 0 {
+	summary, err := getExitDependencySummary(db.DB, exit.ID)
+	if err != nil {
+		return err
+	}
+	if exitHasActiveDependencies(summary) {
 		return c.Status(400).JSON(fiber.Map{
-			"error":      "cannot delete exit with active rules",
-			"rule_count": count,
+			"error":                       "cannot delete exit with active dependencies",
+			"active_rule_count":           summary.ActiveRuleCount,
+			"inactive_rule_count":         summary.InactiveRuleCount,
+			"active_subscription_count":   summary.ActiveSubscriptionCount,
+			"inactive_subscription_count": summary.InactiveSubscriptionCount,
 		})
 	}
 
@@ -472,6 +536,19 @@ func (h *ExitHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		summary, err := getExitDependencySummary(tx, exit.ID)
+		if err != nil {
+			return err
+		}
+		if exitHasActiveDependencies(summary) {
+			return fiber.NewError(fiber.StatusBadRequest, "cannot delete exit with active dependencies")
+		}
+		if err := tx.Model(&models.Rule{}).Where("exit_id = ?", exit.ID).Update("exit_id", nil).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Subscription{}).Where("exit_id = ?", exit.ID).Update("exit_id", nil).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("exit_id = ?", exit.ID).Delete(&models.ExitRuntimeEvent{}).Error; err != nil {
 			return err
 		}

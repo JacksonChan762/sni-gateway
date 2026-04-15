@@ -211,6 +211,20 @@ func (em *ExitManager) Restart(exit *models.Exit) error {
 		return nil
 	}
 
+	gStatus, err := em.docker.GetContainerStatus(ctx, "gluetun-"+exit.Name)
+	if err != nil {
+		em.logEvent(exit.ID, "restart", "failed", err.Error())
+		return err
+	}
+	if gStatus == "not_found" {
+		if err := em.CreateAndStart(exit); err != nil {
+			em.logEvent(exit.ID, "restart", "failed", err.Error())
+			return err
+		}
+		em.logEvent(exit.ID, "restart", "success", "runtime recreated")
+		return nil
+	}
+
 	_ = em.docker.RestartContainer(ctx, "relay-"+exit.Name)
 	if err := em.docker.RestartContainer(ctx, "gluetun-"+exit.Name); err != nil {
 		em.logEvent(exit.ID, "restart", "failed", err.Error())

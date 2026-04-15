@@ -56,7 +56,9 @@ function stringifyEnvYamlBlock(
   protocol: 'wireguard' | 'openvpn'
 ) {
   const order = protocol === 'openvpn' ? openvpnOrder : wireguardOrder
-  return order.map(key => `${key}=${env[key] ?? ''}`).join('\n') + '\n'
+  const orderedKeys = new Set(order)
+  const extraKeys = Object.keys(env).filter(key => !orderedKeys.has(key))
+  return [...order, ...extraKeys].map(key => `${key}=${env[key] ?? ''}`).join('\n') + '\n'
 }
 
 function convertEnvironmentBlock(
@@ -94,12 +96,18 @@ function extractEnvironmentBlock(configYaml: string) {
       WIREGUARD_PRIVATE_KEY: '', WIREGUARD_ADDRESSES: '',
     }, 'wireguard')
   }
+  const envIndent = lines[envIndex].search(/\S/)
   const extracted: string[] = []
   for (let i = envIndex + 1; i < lines.length; i++) {
     const line = lines[i]
-    if (line.startsWith('      - ')) { extracted.push(line.slice(8)); continue }
-    if (line.startsWith('      ')) { extracted.push(line.slice(6).replace(': ', '=')); continue }
-    break
+    if (!line.trim()) continue
+    const indent = line.search(/\S/)
+    if (indent <= envIndent) break
+    let entry = line.trim()
+    if (entry.startsWith('- ')) entry = entry.slice(2).trim()
+    if (!entry) continue
+    if (!entry.includes('=')) entry = entry.replace(/:\s*/, '=')
+    extracted.push(entry)
   }
   return extracted.length > 0 ? extracted.join('\n') + '\n' : ''
 }
@@ -267,7 +275,7 @@ export default function Exits() {
             else createMut.mutate(data)
           }}
           loading={createMut.isPending || updateMut.isPending}
-          error={getApiError(createMut.error) || getApiError(updateMut.error)}
+          error={(createMut.error && getApiError(createMut.error)) || (updateMut.error && getApiError(updateMut.error)) || ''}
         />
       )}
 
@@ -401,7 +409,9 @@ function ExitFormModal({
   const [showPreview, setShowPreview] = useState(false)
 
   const env = parseEnvYamlBlock(form.environment_yaml)
-  const fields = form.protocol === 'openvpn' ? openvpnOrder : wireguardOrder
+  const knownFields = form.protocol === 'openvpn' ? openvpnOrder : wireguardOrder
+  const knownFieldSet = new Set(knownFields)
+  const fields = [...knownFields, ...Object.keys(env).filter(key => !knownFieldSet.has(key))]
 
   const updateEnvField = (key: string, value: string) => {
     const next = parseEnvYamlBlock(form.environment_yaml)

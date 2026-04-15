@@ -170,7 +170,13 @@ func (c *Client) StartContainer(ctx context.Context, name string) error {
 
 func (c *Client) StopContainer(ctx context.Context, name string) error {
 	timeout := 30
-	return c.cli.ContainerStop(ctx, name, container.StopOptions{Timeout: &timeout})
+	if err := c.cli.ContainerStop(ctx, name, container.StopOptions{Timeout: &timeout}); err != nil {
+		if client.IsErrNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Client) RestartContainer(ctx context.Context, name string) error {
@@ -179,7 +185,13 @@ func (c *Client) RestartContainer(ctx context.Context, name string) error {
 }
 
 func (c *Client) RemoveContainer(ctx context.Context, name string, force bool) error {
-	return c.cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: force})
+	if err := c.cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: force}); err != nil {
+		if client.IsErrNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Client) GetContainerStatus(ctx context.Context, name string) (string, error) {

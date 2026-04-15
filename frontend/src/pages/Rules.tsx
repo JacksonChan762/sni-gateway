@@ -212,7 +212,7 @@ export default function Rules() {
             else createMut.mutate(data)
           }}
           loading={createMut.isPending || updateMut.isPending}
-          error={getApiError(createMut.error) || getApiError(updateMut.error)}
+          error={(createMut.error && getApiError(createMut.error)) || (updateMut.error && getApiError(updateMut.error)) || ''}
         />
       )}
     </div>

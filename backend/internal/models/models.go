@@ -5,19 +5,19 @@ import (
 )
 
 type Exit struct {
-	ID          uint      `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name        string    `json:"name" gorm:"uniqueIndex;not null"`
-	Runtime     string    `json:"runtime" gorm:"default:'gluetun'"`
-	Protocol    string    `json:"protocol"` // wireguard / openvpn
-	Provider    string    `json:"provider"`
-	Country     string    `json:"country"`
-	City        string    `json:"city"`
-	Status      string    `json:"status" gorm:"default:'stopped'"` // running/stopped/unhealthy
-	PublicIP    string    `json:"public_ip"`
-	Enabled     bool      `json:"enabled" gorm:"default:true"`
-	ConfigJSON  string    `json:"config_json,omitempty" gorm:"type:jsonb"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID         uint      `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name       string    `json:"name" gorm:"uniqueIndex;not null"`
+	Runtime    string    `json:"runtime" gorm:"default:'gluetun'"`
+	Protocol   string    `json:"protocol"` // wireguard / openvpn
+	Provider   string    `json:"provider"`
+	Country    string    `json:"country"`
+	City       string    `json:"city"`
+	Status     string    `json:"status" gorm:"default:'stopped'"` // running/stopped/unhealthy
+	PublicIP   string    `json:"public_ip"`
+	Enabled    bool      `json:"enabled" gorm:"default:true"`
+	ConfigJSON string    `json:"config_json,omitempty" gorm:"type:jsonb"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type Rule struct {
@@ -25,7 +25,7 @@ type Rule struct {
 	Pattern   string    `json:"pattern" gorm:"not null"`
 	Type      string    `json:"type" gorm:"not null"` // exact / suffix
 	ExitID    *uint     `json:"exit_id"`
-	Exit      *Exit     `json:"exit,omitempty" gorm:"foreignKey:ExitID"`
+	Exit      *Exit     `json:"exit,omitempty" gorm:"foreignKey:ExitID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
 	Priority  int       `json:"priority" gorm:"default:100"`
 	Source    string    `json:"source" gorm:"default:'manual'"` // manual / subscription
 	SubID     *uint     `json:"sub_id,omitempty"`
@@ -39,7 +39,7 @@ type Subscription struct {
 	Name            string     `json:"name" gorm:"not null"`
 	URL             string     `json:"url" gorm:"not null"`
 	ExitID          *uint      `json:"exit_id"`
-	Exit            *Exit      `json:"exit,omitempty" gorm:"foreignKey:ExitID"`
+	Exit            *Exit      `json:"exit,omitempty" gorm:"foreignKey:ExitID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
 	Enabled         bool       `json:"enabled" gorm:"default:true"`
 	IntervalMinutes int        `json:"interval_minutes" gorm:"default:360"`
 	LastSyncAt      *time.Time `json:"last_sync_at"`
