@@ -56,7 +56,7 @@ func TestBuildExitConfigYAMLPreservesStoredEnvironment(t *testing.T) {
 func TestBuildManualRuleNormalizesPlusPrefix(t *testing.T) {
 	rule, err := buildManualRule(CreateRuleRequest{
 		Pattern:  " +.example.com ",
-		Type:     "exact",
+		Type:     "auto",
 		Priority: 200,
 	})
 	if err != nil {
@@ -71,5 +71,35 @@ func TestBuildManualRuleNormalizesPlusPrefix(t *testing.T) {
 	}
 	if rule.Priority != 200 {
 		t.Fatalf("priority = %d, want 200", rule.Priority)
+	}
+}
+
+func TestBuildManualRuleAutoDetectsPlainPatternAsExact(t *testing.T) {
+	rule, err := buildManualRule(CreateRuleRequest{
+		Pattern: "example.com",
+		Type:    "auto",
+	})
+	if err != nil {
+		t.Fatalf("buildManualRule returned error: %v", err)
+	}
+
+	if rule.Pattern != "example.com" {
+		t.Fatalf("pattern = %q, want example.com", rule.Pattern)
+	}
+	if rule.Type != "exact" {
+		t.Fatalf("type = %q, want exact", rule.Type)
+	}
+}
+
+func TestBuildManualRuleDefaultsMissingTypeToAuto(t *testing.T) {
+	rule, err := buildManualRule(CreateRuleRequest{
+		Pattern: "example.com",
+	})
+	if err != nil {
+		t.Fatalf("buildManualRule returned error: %v", err)
+	}
+
+	if rule.Type != "exact" {
+		t.Fatalf("type = %q, want exact", rule.Type)
 	}
 }

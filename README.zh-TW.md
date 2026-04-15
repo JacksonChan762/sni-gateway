@@ -212,6 +212,7 @@ curl -X POST http://127.0.0.1:8080/api/rules \
 
 - `exact` — 精確比對單一主機名稱。
 - `suffix` — 比對該網域及其所有子網域。
+- `auto` 或省略 — `+.` 開頭的 pattern 會建立為 suffix 規則，其他 pattern 會建立為 exact 規則。
 
 優先級數值越高，越先被評估。手動規則預設為 `100`，訂閱規則為 `50`。
 

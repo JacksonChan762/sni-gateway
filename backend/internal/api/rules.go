@@ -127,17 +127,26 @@ func (h *RuleHandler) Update(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	if req.Pattern != "" {
-		rule.Pattern = normalizeRulePattern(req.Pattern)
-		if strings.HasPrefix(strings.TrimSpace(req.Pattern), "+.") {
-			rule.Type = "suffix"
+	if req.Pattern != "" || req.Type != "" {
+		rawPattern := rule.Pattern
+		if req.Pattern != "" {
+			rawPattern = req.Pattern
+			rule.Pattern = normalizeRulePattern(req.Pattern)
 		}
-	}
-	if req.Type != "" {
-		rule.Type = req.Type
-	}
-	if strings.HasPrefix(strings.TrimSpace(req.Pattern), "+.") {
-		rule.Type = "suffix"
+
+		requestedType := rule.Type
+		if req.Type != "" {
+			requestedType = req.Type
+		}
+		if req.Type == "auto" && req.Pattern == "" {
+			requestedType = rule.Type
+		}
+
+		ruleType, err := resolveManualRuleType(rawPattern, requestedType)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		rule.Type = ruleType
 	}
 	if _, ok := fields["exit_id"]; ok {
 		present, exitID, err := parseOptionalUintField(fields, "exit_id")
@@ -187,11 +196,9 @@ func buildManualRule(req CreateRuleRequest) (models.Rule, error) {
 	}
 
 	ruleType := strings.TrimSpace(req.Type)
-	if strings.HasPrefix(strings.TrimSpace(req.Pattern), "+.") {
-		ruleType = "suffix"
-	}
-	if ruleType != "exact" && ruleType != "suffix" {
-		return models.Rule{}, fiber.NewError(fiber.StatusBadRequest, "type must be exact or suffix")
+	ruleType, err := resolveManualRuleType(req.Pattern, ruleType)
+	if err != nil {
+		return models.Rule{}, err
 	}
 
 	enabled := true
@@ -217,6 +224,20 @@ func normalizeRulePattern(pattern string) string {
 	pattern = strings.TrimSpace(pattern)
 	pattern = strings.TrimPrefix(pattern, "+.")
 	return strings.TrimSpace(pattern)
+}
+
+func resolveManualRuleType(pattern string, ruleType string) (string, error) {
+	ruleType = strings.TrimSpace(ruleType)
+	if strings.HasPrefix(strings.TrimSpace(pattern), "+.") {
+		return "suffix", nil
+	}
+	if ruleType == "" || ruleType == "auto" {
+		return "exact", nil
+	}
+	if ruleType != "exact" && ruleType != "suffix" {
+		return "", fiber.NewError(fiber.StatusBadRequest, "type must be exact, suffix, or auto")
+	}
+	return ruleType, nil
 }
 
 func exitReferenceResponse(c *fiber.Ctx, err error) error {

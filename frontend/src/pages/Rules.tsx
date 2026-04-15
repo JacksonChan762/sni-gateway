@@ -6,6 +6,8 @@ import { Plus, Trash2, Pencil, X, ListFilter, Search } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/ConfirmModal'
 
+type RuleFormType = Rule['type'] | 'auto'
+
 export default function Rules() {
   const qc = useQueryClient()
   const toast = useToast()
@@ -241,7 +243,7 @@ function RuleFormModal({
 }) {
   const [form, setForm] = useState({
     pattern: rule?.pattern ?? '',
-    type: (rule?.type ?? 'exact') as 'exact' | 'suffix',
+    type: (rule?.type ?? 'auto') as RuleFormType,
     exit_id: rule?.exit_id ?? null,
     priority: rule?.priority ?? 100,
     enabled: rule?.enabled ?? true,
@@ -259,13 +261,16 @@ function RuleFormModal({
     setLocalError('')
 
     if (rule) {
-      onSubmit(form)
+      onSubmit({
+        ...form,
+        type: resolveRuleType(form.pattern, form.type),
+      })
       return
     }
 
     const rules = patterns.map(pattern => ({
       pattern,
-      type: pattern.startsWith('+.') ? 'suffix' : form.type,
+      type: resolveRuleType(pattern, form.type),
       exit_id: form.exit_id,
       priority: form.priority,
       enabled: form.enabled,
@@ -293,7 +298,6 @@ function RuleFormModal({
                 onChange={e => {
                   const v = e.target.value
                   set('pattern', v)
-                  if (v.startsWith('+.')) set('type', 'suffix')
                 }}
               />
             ) : (
@@ -302,15 +306,13 @@ function RuleFormModal({
                 placeholder={'example.com\n+.example.org\napi.example.net'}
                 value={form.pattern}
                 onChange={e => {
-                  const v = e.target.value
-                  set('pattern', v)
-                  if (v.trimStart().startsWith('+.')) set('type', 'suffix')
+                  set('pattern', e.target.value)
                 }}
               />
             )}
             <div className="flex items-center justify-between gap-3 mt-1">
               <p className="text-xs text-gray-600">
-                Prefix +. for suffix match
+                Auto detects +. prefixes as suffix matches
               </p>
               {!rule && (
                 <span className="text-xs text-gray-500 tabular-nums">
@@ -325,8 +327,9 @@ function RuleFormModal({
               <select
                 className="select"
                 value={form.type}
-                onChange={e => set('type', e.target.value)}
+                onChange={e => set('type', e.target.value as RuleFormType)}
               >
+                {!rule && <option value="auto">Auto detect</option>}
                 <option value="exact">Exact match</option>
                 <option value="suffix">Suffix match</option>
               </select>
@@ -401,4 +404,10 @@ function parseRulePatterns(input: string) {
   }
 
   return patterns
+}
+
+function resolveRuleType(pattern: string, selectedType: RuleFormType): Rule['type'] {
+  if (pattern.trimStart().startsWith('+.')) return 'suffix'
+  if (selectedType === 'suffix') return 'suffix'
+  return 'exact'
 }

@@ -212,6 +212,7 @@ Rule types:
 
 - `exact` — match one hostname exactly.
 - `suffix` — match the hostname and all subdomains.
+- `auto` or omitted — `+.` patterns become suffix rules; all other patterns become exact rules.
 
 Higher-priority rules are evaluated first. Manual rules default to `100`; subscription rules use `50`.
 
