@@ -2,25 +2,38 @@
 
 Base URL:
 
-```txt
+```
 http://127.0.0.1:8080
 ```
 
-Public routes:
+Public routes (no token required):
 
 - `GET /health`
 - `POST /api/auth/login`
 
 All other `/api/*` routes require:
 
-```txt
+```
 Authorization: Bearer <token>
 ```
+
+## Contents
+
+- [Conventions](#conventions)
+- [Health](#health)
+- [Auth](#auth)
+- [Stats](#stats)
+- [Exits](#exits)
+- [Rules](#rules)
+- [Subscriptions](#subscriptions)
+- [Publish](#publish)
+- [End-to-End Example](#end-to-end-example)
+- [Runtime Notes](#runtime-notes)
 
 ## Conventions
 
 - Request and response content type: `application/json`
-- Timestamps are RFC3339 strings.
+- Timestamps are RFC 3339 strings.
 - Most errors use:
 
 ```json
@@ -29,7 +42,7 @@ Authorization: Bearer <token>
 }
 ```
 
-Set a shell token for the examples:
+Set a shell token for the examples below:
 
 ```bash
 TOKEN="$(
@@ -42,6 +55,8 @@ TOKEN="$(
 
 Use a real password if `ADMIN_PASSWORD` is set in `.env`.
 
+---
+
 ## Health
 
 ### `GET /health`
@@ -52,9 +67,11 @@ curl http://127.0.0.1:8080/health
 
 Response:
 
-```txt
+```
 ok
 ```
+
+---
 
 ## Auth
 
@@ -80,8 +97,10 @@ Response:
 
 Errors:
 
-- `400` for malformed JSON or missing username/password.
-- `401` for invalid credentials.
+- `400` — malformed JSON or missing username/password.
+- `401` — invalid credentials.
+
+---
 
 ## Stats
 
@@ -94,7 +113,7 @@ curl http://127.0.0.1:8080/api/stats \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Response example:
+Response:
 
 ```json
 {
@@ -111,6 +130,8 @@ Response example:
   }
 }
 ```
+
+---
 
 ## Exits
 
@@ -178,33 +199,27 @@ curl -X POST http://127.0.0.1:8080/api/exits \
 
 Accepted fields:
 
-```json
-{
-  "name": "string, required",
-  "runtime": "string, optional, default gluetun",
-  "protocol": "wireguard|openvpn",
-  "provider": "string, optional, default protonvpn",
-  "country": "string, optional",
-  "city": "string, optional",
-  "wireguard_private_key": "string, optional when config_yaml supplies WIREGUARD_PRIVATE_KEY",
-  "wireguard_addresses": "string, optional",
-  "openvpn_user": "string, optional when config_yaml supplies OPENVPN_USER",
-  "openvpn_password": "string, optional when config_yaml supplies OPENVPN_PASSWORD",
-  "config_yaml": "string, optional",
-  "enabled": true
-}
-```
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string | Required. |
+| `runtime` | string | Optional. Default `gluetun`. |
+| `protocol` | `wireguard` \| `openvpn` | Optional. Derived from `VPN_TYPE` in `config_yaml`. |
+| `provider` | string | Optional. Derived from `VPN_SERVICE_PROVIDER`. |
+| `country` | string | Optional. Derived from `SERVER_COUNTRIES`. |
+| `city` | string | Optional. Derived from `SERVER_CITIES`. |
+| `wireguard_private_key` | string | Optional when `config_yaml` supplies `WIREGUARD_PRIVATE_KEY`. |
+| `wireguard_addresses` | string | Optional. |
+| `openvpn_user` | string | Optional when `config_yaml` supplies `OPENVPN_USER`. |
+| `openvpn_password` | string | Optional when `config_yaml` supplies `OPENVPN_PASSWORD`. |
+| `config_yaml` | string | Optional. Compose-style YAML with `services.gluetun.environment`. |
+| `enabled` | bool | Optional. Default `true`. |
 
 Notes:
 
-- `config_yaml` can be compose-style YAML with `services.gluetun.environment`.
-- Environment can be a list of `KEY=VALUE` entries or a mapping.
-- `VPN_TYPE` sets `protocol`.
-- `VPN_SERVICE_PROVIDER` sets `provider`.
-- `SERVER_COUNTRIES` and `SERVER_CITIES` set `country` and `city`.
+- `config_yaml` environment may be a list of `KEY=VALUE` entries or a key-value mapping.
 - WireGuard exits require `WIREGUARD_PRIVATE_KEY`.
 - OpenVPN exits require `OPENVPN_USER` and `OPENVPN_PASSWORD`.
-- Extra Gluetun environment variables are preserved in config round trips.
+- Extra Gluetun environment variables are preserved across config round trips.
 
 ### `PUT /api/exits/:id`
 
@@ -222,9 +237,8 @@ curl -X PUT http://127.0.0.1:8080/api/exits/8 \
 
 Notes:
 
-- Exit `name` is not updated.
-- Config changes update database state only.
-- Restart the exit to recreate runtime containers with new config.
+- Exit `name` cannot be changed.
+- Config changes update database state only. Restart the exit to recreate containers with new settings.
 
 ### `DELETE /api/exits/:id`
 
@@ -243,7 +257,7 @@ Response:
 }
 ```
 
-If active dependencies still point to this exit:
+Blocked when active dependencies exist:
 
 ```json
 {
@@ -255,7 +269,7 @@ If active dependencies still point to this exit:
 }
 ```
 
-Inactive rule/subscription references are cleared during delete.
+Inactive rule/subscription references are cleared automatically on delete.
 
 ### `POST /api/exits/:id/start`
 
@@ -288,7 +302,7 @@ curl -X POST http://127.0.0.1:8080/api/exits/8/restart \
 
 ### `POST /api/exits/:id/test`
 
-Get live status and current public IP.
+Get live container status and current public IP.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/exits/8/test \
@@ -306,7 +320,7 @@ Response:
 
 ### `GET /api/exits/:id/status`
 
-Get status and public IP, then persist them back to the database.
+Get status and public IP, then persist them to the database.
 
 ```bash
 curl http://127.0.0.1:8080/api/exits/8/status \
@@ -347,9 +361,11 @@ Response:
 }
 ```
 
+---
+
 ## Rules
 
-Rules map a domain pattern to an exit.
+Rules map a domain pattern to an exit. Higher-priority rules are evaluated first.
 
 ### Rule Object
 
@@ -371,14 +387,16 @@ Rules map a domain pattern to an exit.
 }
 ```
 
+`source` is `manual` for user-created rules and `subscription` for rules generated by a subscription sync.
+
 ### `GET /api/rules`
 
 List rules.
 
 Query parameters:
 
-- `source`: filter by `manual` or `subscription`.
-- `exit_id`: filter by exit ID.
+- `source` — filter by `manual` or `subscription`.
+- `exit_id` — filter by exit ID.
 
 ```bash
 curl http://127.0.0.1:8080/api/rules \
@@ -404,23 +422,15 @@ curl -X POST http://127.0.0.1:8080/api/rules \
 
 Fields:
 
-```json
-{
-  "pattern": "string, required",
-  "type": "exact|suffix, required",
-  "exit_id": "integer or null",
-  "priority": 100,
-  "enabled": true
-}
-```
+| Field | Type | Notes |
+| --- | --- | --- |
+| `pattern` | string | Required. Hostname or domain. |
+| `type` | `exact` \| `suffix` | Required. `suffix` matches the domain and all subdomains. |
+| `exit_id` | integer \| null | Must reference an existing exit when non-null. |
+| `priority` | integer | Default `100` when omitted or `0`. Higher = evaluated first. |
+| `enabled` | bool | Default `true`. |
 
-Defaults:
-
-- `priority`: `100` when omitted or `0`.
-- `enabled`: `true` when omitted.
-- `source`: always `manual` for this endpoint.
-
-`exit_id` must reference an existing exit when non-null.
+`source` is always `manual` for this endpoint.
 
 ### `PUT /api/rules/:id`
 
@@ -454,9 +464,31 @@ Response:
 }
 ```
 
+---
+
 ## Subscriptions
 
-Subscriptions download remote list files and convert them into generated rules.
+Subscriptions download remote domain-list files on a schedule and convert each entry into a routing rule.
+
+### Subscription List Format
+
+The parser accepts these line formats:
+
+```
+# comment lines are ignored
+
+# plain domain → exact match rule
+example.com
+
+# dot prefix → suffix match rule (matches example.com and all subdomains)
++.example.com
+
+# Clash/Surge/Meta style prefixes are stripped before parsing
+DOMAIN,example.com
+DOMAIN-SUFFIX,example.com
+```
+
+Subscription rules get priority `50`. Manual rules default to `100` and are always evaluated first.
 
 ### Subscription Object
 
@@ -507,20 +539,13 @@ curl -X POST http://127.0.0.1:8080/api/subscriptions \
 
 Fields:
 
-```json
-{
-  "name": "string, required",
-  "url": "string, required",
-  "exit_id": "integer or null",
-  "enabled": true,
-  "interval_minutes": 360
-}
-```
-
-Defaults:
-
-- `enabled`: `true` when omitted.
-- `interval_minutes`: `360` when omitted or `0`.
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string | Required. |
+| `url` | string | Required. URL of the domain list file. |
+| `exit_id` | integer \| null | Optional. Exit to route matched domains through. |
+| `enabled` | bool | Default `true`. |
+| `interval_minutes` | integer | Default `360` when omitted or `0`. |
 
 ### `PUT /api/subscriptions/:id`
 
@@ -537,11 +562,11 @@ curl -X PUT http://127.0.0.1:8080/api/subscriptions/1 \
   }'
 ```
 
-When a subscription is disabled, generated rules for that subscription are deleted and the backend writes/reloads generated config.
+Disabling a subscription deletes its generated rules and automatically reloads the generated nginx config.
 
 ### `DELETE /api/subscriptions/:id`
 
-Delete a subscription and its generated rules.
+Delete a subscription and all its generated rules.
 
 ```bash
 curl -X DELETE http://127.0.0.1:8080/api/subscriptions/1 \
@@ -550,7 +575,7 @@ curl -X DELETE http://127.0.0.1:8080/api/subscriptions/1 \
 
 ### `POST /api/subscriptions/:id/sync`
 
-Trigger immediate sync.
+Trigger an immediate sync.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/subscriptions/1/sync \
@@ -565,13 +590,15 @@ Response:
 }
 ```
 
+---
+
 ## Publish
 
-Rules are stored in the database first. They become active in nginx only after publish apply.
+Rules and subscriptions are stored in the database. They become active in nginx only after publish apply.
 
 ### `POST /api/publish/preview`
 
-Preview generated config.
+Preview the generated nginx config without writing it.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/publish/preview \
@@ -588,7 +615,7 @@ Response:
 
 ### `POST /api/publish/validate`
 
-Validate generated config.
+Validate the generated config using `nginx -t`.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/publish/validate \
@@ -614,7 +641,7 @@ Failure:
 
 ### `POST /api/publish/apply`
 
-Write generated config to the nginx shared volume and reload nginx.
+Write the generated config to the nginx shared volume and reload nginx.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/publish/apply \
@@ -631,7 +658,7 @@ Response:
 
 ### `POST /api/publish/rollback`
 
-Restore previous generated config.
+Restore the previous generated config.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/publish/rollback \
@@ -669,9 +696,12 @@ Response:
 ]
 ```
 
+---
+
 ## End-to-End Example
 
 ```bash
+# 1. Authenticate
 TOKEN="$(
   curl -s -X POST http://127.0.0.1:8080/api/auth/login \
     -H 'Content-Type: application/json' \
@@ -679,6 +709,7 @@ TOKEN="$(
   sed -n 's/.*"token":"\([^"]*\)".*/\1/p'
 )"
 
+# 2. Create a WireGuard exit
 curl -X POST http://127.0.0.1:8080/api/exits \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
@@ -688,6 +719,7 @@ curl -X POST http://127.0.0.1:8080/api/exits \
     "config_yaml": "enabled: true\nservices:\n  gluetun:\n    image: qmcgaw/gluetun:latest\n    environment:\n      - VPN_SERVICE_PROVIDER=surfshark\n      - VPN_TYPE=wireguard\n      - SERVER_COUNTRIES=United States\n      - WIREGUARD_PRIVATE_KEY=YOUR_PRIVATE_KEY\n"
   }'
 
+# 3. Add a routing rule (exit_id from step 2)
 curl -X POST http://127.0.0.1:8080/api/rules \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
@@ -699,6 +731,7 @@ curl -X POST http://127.0.0.1:8080/api/rules \
     "enabled": true
   }'
 
+# 4. Apply generated nginx config
 curl -X POST http://127.0.0.1:8080/api/publish/apply \
   -H "Authorization: Bearer $TOKEN"
 ```
@@ -711,11 +744,13 @@ curl -vk --resolve example.com:443:YOUR_SERVER_IP https://example.com/
 openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 ```
 
+---
+
 ## Runtime Notes
 
-- `GET /api/exits/:id/config` returns compose-style YAML.
-- Extra `services.gluetun.environment` keys are preserved for editing.
-- Rules and subscription syncs do not automatically publish nginx config.
-- Use `POST /api/publish/apply` after routing changes.
-- Matched port `80` traffic redirects to HTTPS.
-- Matched port `443` traffic is forwarded by SNI through the selected relay/VPN exit.
+- Rules and subscription syncs do not automatically apply nginx config. Always call `POST /api/publish/apply` after routing changes.
+- `GET /api/exits/:id/config` returns compose-style YAML; extra `services.gluetun.environment` keys are preserved for editing.
+- Exit config updates change database state only. Restart the exit to recreate containers with new settings.
+- Matched port `80` traffic redirects to HTTPS. Matched port `443` traffic is forwarded by SNI through the selected relay/VPN exit.
+- The subscription list file is fetched with a 10 MB limit.
+- Subscription rules have priority `50`; manual rules default to `100`.
