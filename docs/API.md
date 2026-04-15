@@ -6,14 +6,22 @@ Base URL:
 http://127.0.0.1:8080
 ```
 
-All API routes are under `/api`.
+Public routes:
 
-This project currently does not require authentication.
+- `GET /health`
+- `POST /api/auth/login`
+
+All other `/api/*` routes require:
+
+```txt
+Authorization: Bearer <token>
+```
 
 ## Conventions
 
-- Content type: `application/json`
-- Error format:
+- Request and response content type: `application/json`
+- Timestamps are RFC3339 strings.
+- Most errors use:
 
 ```json
 {
@@ -21,13 +29,22 @@ This project currently does not require authentication.
 }
 ```
 
-- Success responses usually return a JSON object or model record
+Set a shell token for the examples:
+
+```bash
+TOKEN="$(
+  curl -s -X POST http://127.0.0.1:8080/api/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"admin","password":"admin"}' |
+  sed -n 's/.*"token":"\([^"]*\)".*/\1/p'
+)"
+```
+
+Use a real password if `ADMIN_PASSWORD` is set in `.env`.
 
 ## Health
 
 ### `GET /health`
-
-Check backend health.
 
 ```bash
 curl http://127.0.0.1:8080/health
@@ -39,6 +56,33 @@ Response:
 ok
 ```
 
+## Auth
+
+### `POST /api/auth/login`
+
+Create a 24-hour JWT for the admin UI/API.
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}'
+```
+
+Response:
+
+```json
+{
+  "token": "jwt-token",
+  "username": "admin",
+  "expires_at": 1776220000
+}
+```
+
+Errors:
+
+- `400` for malformed JSON or missing username/password.
+- `401` for invalid credentials.
+
 ## Stats
 
 ### `GET /api/stats`
@@ -46,7 +90,8 @@ ok
 Get dashboard summary counts.
 
 ```bash
-curl http://127.0.0.1:8080/api/stats
+curl http://127.0.0.1:8080/api/stats \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response example:
@@ -59,7 +104,7 @@ Response example:
   "running_exit_count": 1,
   "last_publish": {
     "id": 1,
-    "version": "v1712345678",
+    "version": "v1776216000",
     "status": "success",
     "message": "config applied successfully",
     "created_at": "2026-04-15T00:28:36Z"
@@ -69,11 +114,9 @@ Response example:
 
 ## Exits
 
-An exit is a VPN runtime backed by `gluetun` and `relay`.
+An exit is a VPN runtime backed by a Gluetun container and a relay sidecar.
 
-### Exit object
-
-Response example:
+### Exit Object
 
 ```json
 {
@@ -92,49 +135,48 @@ Response example:
 }
 ```
 
+`config_json` is intentionally scrubbed from list/create/update responses.
+
 ### `GET /api/exits`
 
 List exits.
 
 ```bash
-curl http://127.0.0.1:8080/api/exits
+curl http://127.0.0.1:8080/api/exits \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `POST /api/exits`
 
-Create an exit.
+Create an exit. If `enabled` is true, the backend creates and starts runtime containers immediately.
 
-Minimal WireGuard example:
+WireGuard example:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/exits \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "us",
-    "protocol": "wireguard",
-    "provider": "surfshark",
-    "country": "United States",
-    "config_yaml": "services:\n  gluetun:\n    environment:\n      - VPN_SERVICE_PROVIDER=surfshark\n      - VPN_TYPE=wireguard\n      - SERVER_COUNTRIES=United States\n      - SERVER_CITIES=\n      - WIREGUARD_PRIVATE_KEY=YOUR_PRIVATE_KEY\n      - WIREGUARD_ADDRESSES=10.14.0.2/16\n",
-    "enabled": true
+    "enabled": true,
+    "config_yaml": "enabled: true\nservices:\n  gluetun:\n    image: qmcgaw/gluetun:latest\n    environment:\n      - VPN_SERVICE_PROVIDER=surfshark\n      - VPN_TYPE=wireguard\n      - SERVER_COUNTRIES=United States\n      - SERVER_CITIES=\n      - WIREGUARD_PRIVATE_KEY=YOUR_PRIVATE_KEY\n      - WIREGUARD_ADDRESSES=10.14.0.2/16\n"
   }'
 ```
 
-Minimal OpenVPN example:
+OpenVPN example:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/exits \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "jp",
-    "protocol": "openvpn",
-    "provider": "protonvpn",
-    "country": "Japan",
-    "config_yaml": "services:\n  gluetun:\n    environment:\n      - VPN_SERVICE_PROVIDER=protonvpn\n      - VPN_TYPE=openvpn\n      - SERVER_COUNTRIES=Japan\n      - SERVER_CITIES=\n      - OPENVPN_USER=YOUR_USER\n      - OPENVPN_PASSWORD=YOUR_PASSWORD\n",
-    "enabled": true
+    "enabled": true,
+    "config_yaml": "enabled: true\nservices:\n  gluetun:\n    image: qmcgaw/gluetun:latest\n    environment:\n      - VPN_SERVICE_PROVIDER=protonvpn\n      - VPN_TYPE=openvpn\n      - SERVER_COUNTRIES=Japan\n      - SERVER_CITIES=\n      - OPENVPN_USER=YOUR_USER\n      - OPENVPN_PASSWORD=YOUR_PASSWORD\n"
   }'
 ```
 
-Accepted request fields:
+Accepted fields:
 
 ```json
 {
@@ -144,10 +186,10 @@ Accepted request fields:
   "provider": "string, optional, default protonvpn",
   "country": "string, optional",
   "city": "string, optional",
-  "wireguard_private_key": "string, optional if config_yaml supplied",
+  "wireguard_private_key": "string, optional when config_yaml supplies WIREGUARD_PRIVATE_KEY",
   "wireguard_addresses": "string, optional",
-  "openvpn_user": "string, optional if config_yaml supplied",
-  "openvpn_password": "string, optional if config_yaml supplied",
+  "openvpn_user": "string, optional when config_yaml supplies OPENVPN_USER",
+  "openvpn_password": "string, optional when config_yaml supplies OPENVPN_PASSWORD",
   "config_yaml": "string, optional",
   "enabled": true
 }
@@ -155,43 +197,42 @@ Accepted request fields:
 
 Notes:
 
-- `name` is separate from `config_yaml`
-- `config_yaml` is parsed from `services.gluetun.environment`
-- Environment values can be given as `KEY=VALUE` entries
-- For WireGuard, `WIREGUARD_PRIVATE_KEY` is required
-- For OpenVPN, `OPENVPN_USER` and `OPENVPN_PASSWORD` are required
-- `WIREGUARD_ADDRESSES` is optional
-- At least one of `SERVER_COUNTRIES` or `SERVER_CITIES` should be set in practice
+- `config_yaml` can be compose-style YAML with `services.gluetun.environment`.
+- Environment can be a list of `KEY=VALUE` entries or a mapping.
+- `VPN_TYPE` sets `protocol`.
+- `VPN_SERVICE_PROVIDER` sets `provider`.
+- `SERVER_COUNTRIES` and `SERVER_CITIES` set `country` and `city`.
+- WireGuard exits require `WIREGUARD_PRIVATE_KEY`.
+- OpenVPN exits require `OPENVPN_USER` and `OPENVPN_PASSWORD`.
+- Extra Gluetun environment variables are preserved in config round trips.
 
 ### `PUT /api/exits/:id`
 
-Update an exit.
-
-Example:
+Update exit metadata/config in the database.
 
 ```bash
 curl -X PUT http://127.0.0.1:8080/api/exits/8 \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
-    "provider": "surfshark",
-    "country": "United States",
     "enabled": true,
-    "config_yaml": "services:\n  gluetun:\n    environment:\n      - VPN_SERVICE_PROVIDER=surfshark\n      - VPN_TYPE=wireguard\n      - SERVER_COUNTRIES=United States\n      - SERVER_CITIES=\n      - WIREGUARD_PRIVATE_KEY=YOUR_PRIVATE_KEY\n"
+    "config_yaml": "enabled: true\nservices:\n  gluetun:\n    image: qmcgaw/gluetun:latest\n    environment:\n      - VPN_SERVICE_PROVIDER=surfshark\n      - VPN_TYPE=wireguard\n      - SERVER_COUNTRIES=United States\n      - SERVER_CITIES=New York\n      - WIREGUARD_PRIVATE_KEY=YOUR_PRIVATE_KEY\n"
   }'
 ```
 
 Notes:
 
-- Exit `name` is not updated here
-- Updating config only changes database config
-- To recreate runtime with the new config, restart the exit
+- Exit `name` is not updated.
+- Config changes update database state only.
+- Restart the exit to recreate runtime containers with new config.
 
 ### `DELETE /api/exits/:id`
 
-Delete an exit.
+Delete an exit and its runtime containers.
 
 ```bash
-curl -X DELETE http://127.0.0.1:8080/api/exits/8
+curl -X DELETE http://127.0.0.1:8080/api/exits/8 \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -202,45 +243,56 @@ Response:
 }
 ```
 
-If active rules still point to this exit:
+If active dependencies still point to this exit:
 
 ```json
 {
-  "error": "cannot delete exit with active rules",
-  "rule_count": 1
+  "error": "cannot delete exit with active dependencies",
+  "active_rule_count": 1,
+  "inactive_rule_count": 0,
+  "active_subscription_count": 1,
+  "inactive_subscription_count": 0
 }
 ```
 
+Inactive rule/subscription references are cleared during delete.
+
 ### `POST /api/exits/:id/start`
 
-Start the exit.
-
 ```bash
-curl -X POST http://127.0.0.1:8080/api/exits/8/start
+curl -X POST http://127.0.0.1:8080/api/exits/8/start \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+
+```json
+{
+  "message": "started"
+}
 ```
 
 ### `POST /api/exits/:id/stop`
 
-Stop the exit.
-
 ```bash
-curl -X POST http://127.0.0.1:8080/api/exits/8/stop
+curl -X POST http://127.0.0.1:8080/api/exits/8/stop \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `POST /api/exits/:id/restart`
 
-Restart the exit.
-
 ```bash
-curl -X POST http://127.0.0.1:8080/api/exits/8/restart
+curl -X POST http://127.0.0.1:8080/api/exits/8/restart \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `POST /api/exits/:id/test`
 
-Get live exit status and current public IP.
+Get live status and current public IP.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/exits/8/test
+curl -X POST http://127.0.0.1:8080/api/exits/8/test \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -254,20 +306,20 @@ Response:
 
 ### `GET /api/exits/:id/status`
 
-Get status and public IP and persist them back to DB.
+Get status and public IP, then persist them back to the database.
 
 ```bash
-curl http://127.0.0.1:8080/api/exits/8/status
+curl http://127.0.0.1:8080/api/exits/8/status \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `GET /api/exits/:id/logs`
 
-Get exit logs.
-
-Default tail is `100`.
+Get Gluetun container logs. Default `tail` is `100`.
 
 ```bash
-curl "http://127.0.0.1:8080/api/exits/8/logs?tail=200"
+curl "http://127.0.0.1:8080/api/exits/8/logs?tail=200" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -280,10 +332,11 @@ Response:
 
 ### `GET /api/exits/:id/config`
 
-Get exit config as YAML.
+Get exit config as compose-style YAML.
 
 ```bash
-curl http://127.0.0.1:8080/api/exits/8/config
+curl http://127.0.0.1:8080/api/exits/8/config \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -298,14 +351,18 @@ Response:
 
 Rules map a domain pattern to an exit.
 
-### Rule object
+### Rule Object
 
 ```json
 {
   "id": 1,
-  "pattern": "ping0.cc",
+  "pattern": "example.com",
   "type": "suffix",
   "exit_id": 8,
+  "exit": {
+    "id": 8,
+    "name": "us"
+  },
   "priority": 100,
   "source": "manual",
   "enabled": true,
@@ -320,26 +377,24 @@ List rules.
 
 Query parameters:
 
-- `source`
-- `exit_id`
-
-Examples:
+- `source`: filter by `manual` or `subscription`.
+- `exit_id`: filter by exit ID.
 
 ```bash
-curl http://127.0.0.1:8080/api/rules
-curl "http://127.0.0.1:8080/api/rules?source=manual"
-curl "http://127.0.0.1:8080/api/rules?exit_id=8"
+curl http://127.0.0.1:8080/api/rules \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `POST /api/rules`
 
-Create a rule.
+Create a manual rule.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/rules \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
-    "pattern": "ping0.cc",
+    "pattern": "example.com",
     "type": "suffix",
     "exit_id": 8,
     "priority": 100,
@@ -347,40 +402,48 @@ curl -X POST http://127.0.0.1:8080/api/rules \
   }'
 ```
 
-Request fields:
+Fields:
 
 ```json
 {
   "pattern": "string, required",
   "type": "exact|suffix, required",
-  "exit_id": 8,
+  "exit_id": "integer or null",
   "priority": 100,
   "enabled": true
 }
 ```
 
+Defaults:
+
+- `priority`: `100` when omitted or `0`.
+- `enabled`: `true` when omitted.
+- `source`: always `manual` for this endpoint.
+
+`exit_id` must reference an existing exit when non-null.
+
 ### `PUT /api/rules/:id`
 
-Update a rule.
+Update a rule. Send `"exit_id": null` to clear the exit binding.
 
 ```bash
 curl -X PUT http://127.0.0.1:8080/api/rules/1 \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
-    "pattern": "ping0.cc",
+    "pattern": "example.com",
     "type": "suffix",
-    "exit_id": 8,
+    "exit_id": null,
     "priority": 200,
-    "enabled": true
+    "enabled": false
   }'
 ```
 
 ### `DELETE /api/rules/:id`
 
-Delete a rule.
-
 ```bash
-curl -X DELETE http://127.0.0.1:8080/api/rules/1
+curl -X DELETE http://127.0.0.1:8080/api/rules/1 \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -393,9 +456,9 @@ Response:
 
 ## Subscriptions
 
-Subscriptions download remote `.list` files and convert them into rules.
+Subscriptions download remote list files and convert them into generated rules.
 
-### Subscription object
+### Subscription Object
 
 ```json
 {
@@ -403,6 +466,10 @@ Subscriptions download remote `.list` files and convert them into rules.
   "name": "AI Sites",
   "url": "https://example.com/ai.list",
   "exit_id": 8,
+  "exit": {
+    "id": 8,
+    "name": "us"
+  },
   "enabled": true,
   "interval_minutes": 360,
   "last_sync_at": null,
@@ -416,18 +483,18 @@ Subscriptions download remote `.list` files and convert them into rules.
 
 ### `GET /api/subscriptions`
 
-List subscriptions.
-
 ```bash
-curl http://127.0.0.1:8080/api/subscriptions
+curl http://127.0.0.1:8080/api/subscriptions \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `POST /api/subscriptions`
 
-Create a subscription.
+Create a subscription. If enabled, the backend syncs it immediately and schedules future syncs.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/subscriptions \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "AI Sites",
@@ -438,37 +505,47 @@ curl -X POST http://127.0.0.1:8080/api/subscriptions \
   }'
 ```
 
-Request fields:
+Fields:
 
 ```json
 {
   "name": "string, required",
   "url": "string, required",
-  "exit_id": 8,
+  "exit_id": "integer or null",
   "enabled": true,
   "interval_minutes": 360
 }
 ```
 
+Defaults:
+
+- `enabled`: `true` when omitted.
+- `interval_minutes`: `360` when omitted or `0`.
+
 ### `PUT /api/subscriptions/:id`
 
-Update a subscription.
+Update a subscription. Send `"exit_id": null` to clear the exit binding.
 
 ```bash
 curl -X PUT http://127.0.0.1:8080/api/subscriptions/1 \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "enabled": true,
+    "exit_id": 8,
     "interval_minutes": 120
   }'
 ```
+
+When a subscription is disabled, generated rules for that subscription are deleted and the backend writes/reloads generated config.
 
 ### `DELETE /api/subscriptions/:id`
 
 Delete a subscription and its generated rules.
 
 ```bash
-curl -X DELETE http://127.0.0.1:8080/api/subscriptions/1
+curl -X DELETE http://127.0.0.1:8080/api/subscriptions/1 \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `POST /api/subscriptions/:id/sync`
@@ -476,7 +553,8 @@ curl -X DELETE http://127.0.0.1:8080/api/subscriptions/1
 Trigger immediate sync.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/subscriptions/1/sync
+curl -X POST http://127.0.0.1:8080/api/subscriptions/1/sync \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -489,14 +567,15 @@ Response:
 
 ## Publish
 
-Rules are stored in DB first. They become active in nginx only after publish apply.
+Rules are stored in the database first. They become active in nginx only after publish apply.
 
 ### `POST /api/publish/preview`
 
 Preview generated config.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/publish/preview
+curl -X POST http://127.0.0.1:8080/api/publish/preview \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -512,10 +591,11 @@ Response:
 Validate generated config.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/publish/validate
+curl -X POST http://127.0.0.1:8080/api/publish/validate \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-Response:
+Success:
 
 ```json
 {
@@ -523,7 +603,7 @@ Response:
 }
 ```
 
-Failure example:
+Failure:
 
 ```json
 {
@@ -534,10 +614,11 @@ Failure example:
 
 ### `POST /api/publish/apply`
 
-Write generated config to nginx shared volume and reload nginx.
+Write generated config to the nginx shared volume and reload nginx.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/publish/apply
+curl -X POST http://127.0.0.1:8080/api/publish/apply \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -553,7 +634,8 @@ Response:
 Restore previous generated config.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/publish/rollback
+curl -X POST http://127.0.0.1:8080/api/publish/rollback \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -566,19 +648,20 @@ Response:
 
 ### `GET /api/publish/history`
 
-Get publish history.
+Get the 50 most recent publish records.
 
 ```bash
-curl http://127.0.0.1:8080/api/publish/history
+curl http://127.0.0.1:8080/api/publish/history \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-Response example:
+Response:
 
 ```json
 [
   {
     "id": 1,
-    "version": "v1712345678",
+    "version": "v1776216000",
     "status": "success",
     "message": "config applied successfully",
     "created_at": "2026-04-15T00:28:36Z"
@@ -588,53 +671,51 @@ Response example:
 
 ## End-to-End Example
 
-Create exit:
-
 ```bash
+TOKEN="$(
+  curl -s -X POST http://127.0.0.1:8080/api/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"admin","password":"admin"}' |
+  sed -n 's/.*"token":"\([^"]*\)".*/\1/p'
+)"
+
 curl -X POST http://127.0.0.1:8080/api/exits \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "us",
-    "protocol": "wireguard",
-    "provider": "surfshark",
-    "country": "United States",
-    "config_yaml": "services:\n  gluetun:\n    environment:\n      - VPN_SERVICE_PROVIDER=surfshark\n      - VPN_TYPE=wireguard\n      - SERVER_COUNTRIES=United States\n      - SERVER_CITIES=\n      - WIREGUARD_PRIVATE_KEY=YOUR_PRIVATE_KEY\n",
-    "enabled": true
+    "enabled": true,
+    "config_yaml": "enabled: true\nservices:\n  gluetun:\n    image: qmcgaw/gluetun:latest\n    environment:\n      - VPN_SERVICE_PROVIDER=surfshark\n      - VPN_TYPE=wireguard\n      - SERVER_COUNTRIES=United States\n      - WIREGUARD_PRIVATE_KEY=YOUR_PRIVATE_KEY\n"
   }'
-```
 
-Create rule:
-
-```bash
 curl -X POST http://127.0.0.1:8080/api/rules \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
-    "pattern": "ping0.cc",
+    "pattern": "example.com",
     "type": "suffix",
-    "exit_id": 8,
+    "exit_id": 1,
     "priority": 100,
     "enabled": true
   }'
-```
 
-Apply:
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/publish/apply
+curl -X POST http://127.0.0.1:8080/api/publish/apply \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Test:
 
 ```bash
-curl -I --resolve ping0.cc:80:YOUR_SERVER_IP http://ping0.cc/
-curl -vk --resolve ping0.cc:443:YOUR_SERVER_IP https://ping0.cc/
-openssl s_client -connect YOUR_SERVER_IP:443 -servername ping0.cc
+curl -I --resolve example.com:80:YOUR_SERVER_IP http://example.com/
+curl -vk --resolve example.com:443:YOUR_SERVER_IP https://example.com/
+openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 ```
 
-## Current Runtime Notes
+## Runtime Notes
 
-- Rules do not auto-apply to nginx
-- Use `POST /api/publish/apply` after rule or subscription changes
-- `GET /api/exits/:id/config` returns compose-style YAML
-- The UI may edit only the `environment` section conceptually, but the API stores normalized exit config in `config_json`
-- For matched domains, port `80` redirects to HTTPS
+- `GET /api/exits/:id/config` returns compose-style YAML.
+- Extra `services.gluetun.environment` keys are preserved for editing.
+- Rules and subscription syncs do not automatically publish nginx config.
+- Use `POST /api/publish/apply` after routing changes.
+- Matched port `80` traffic redirects to HTTPS.
+- Matched port `443` traffic is forwarded by SNI through the selected relay/VPN exit.
