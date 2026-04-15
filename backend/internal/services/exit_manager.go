@@ -27,6 +27,58 @@ func (em *ExitManager) ensureDockerAvailable() error {
 	return nil
 }
 
+func (em *ExitManager) ReconcileAfterUpdate(before, after *models.Exit) error {
+	if before == nil || after == nil {
+		return nil
+	}
+
+	runtimeChanged := exitRuntimeConfigChanged(before, after)
+	if !runtimeChanged && before.Enabled == after.Enabled {
+		return nil
+	}
+	if !after.Enabled && !before.Enabled && before.Status != "running" {
+		return nil
+	}
+
+	if err := em.ensureDockerAvailable(); err != nil {
+		em.updateStatus(after, "unhealthy")
+		em.logEvent(after.ID, "update", "failed", err.Error())
+		return err
+	}
+
+	ctx := context.Background()
+	em.logEvent(after.ID, "update", "started", "reconciling runtime")
+
+	if runtimeChanged {
+		_ = em.docker.RemoveContainer(ctx, "relay-"+after.Name, true)
+		_ = em.docker.RemoveContainer(ctx, "gluetun-"+after.Name, true)
+	}
+
+	if !after.Enabled {
+		_ = em.docker.RemoveContainer(ctx, "relay-"+after.Name, true)
+		_ = em.docker.RemoveContainer(ctx, "gluetun-"+after.Name, true)
+		em.updateStatus(after, "stopped")
+		em.logEvent(after.ID, "update", "success", "runtime disabled")
+		return nil
+	}
+
+	if runtimeChanged && before.Status == "stopped" {
+		em.updateStatus(after, "stopped")
+		em.logEvent(after.ID, "update", "success", "runtime config saved; will recreate on next start")
+		return nil
+	}
+
+	if !before.Enabled || runtimeChanged {
+		if err := em.CreateAndStart(after); err != nil {
+			em.logEvent(after.ID, "update", "failed", err.Error())
+			return err
+		}
+		em.logEvent(after.ID, "update", "success", "runtime recreated")
+	}
+
+	return nil
+}
+
 func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.updateStatus(exit, "unhealthy")
@@ -82,13 +134,7 @@ func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 	em.updateStatus(exit, "running")
 	em.logEvent(exit.ID, "create", "success", "containers created")
 
-	ip, err := em.docker.GetPublicIP(ctx, exit.Name)
-	if err != nil {
-		log.Printf("Could not get public IP for %s: %v", exit.Name, err)
-	} else {
-		exit.PublicIP = ip
-		db.DB.Save(exit)
-	}
+	go em.refreshPublicIP(exit.ID, exit.Name)
 
 	return nil
 }
@@ -305,8 +351,39 @@ func (em *ExitManager) logEvent(exitID uint, action, status, msg string) {
 	db.DB.Create(&event)
 }
 
+func (em *ExitManager) refreshPublicIP(exitID uint, exitName string) {
+	ip, err := em.docker.GetPublicIP(context.Background(), exitName)
+	if err != nil {
+		log.Printf("Could not get public IP for %s: %v", exitName, err)
+		return
+	}
+	db.DB.Model(&models.Exit{}).Where("id = ?", exitID).Update("public_ip", ip)
+}
+
 func parseConfigJSON(raw string) map[string]interface{} {
 	result := make(map[string]interface{})
 	json.Unmarshal([]byte(raw), &result)
 	return result
+}
+
+func exitRuntimeConfigChanged(before, after *models.Exit) bool {
+	if before.Name != after.Name {
+		return true
+	}
+	if before.Runtime != after.Runtime {
+		return true
+	}
+	if before.Protocol != after.Protocol {
+		return true
+	}
+	if before.Provider != after.Provider {
+		return true
+	}
+	if before.Country != after.Country {
+		return true
+	}
+	if before.City != after.City {
+		return true
+	}
+	return before.ConfigJSON != after.ConfigJSON
 }

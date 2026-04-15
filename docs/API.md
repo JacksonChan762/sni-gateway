@@ -432,6 +432,36 @@ Fields:
 
 `source` is always `manual` for this endpoint.
 
+### `POST /api/rules/bulk`
+
+Create many manual rules in one request.
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/rules/bulk \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "rules": [
+      {
+        "pattern": "example.com",
+        "type": "suffix",
+        "exit_id": 8,
+        "priority": 100,
+        "enabled": true
+      },
+      {
+        "pattern": "+.example.org",
+        "type": "exact",
+        "exit_id": 8,
+        "priority": 100,
+        "enabled": true
+      }
+    ]
+  }'
+```
+
+The bulk endpoint accepts up to `5000` rules per request and de-duplicates identical `type` + `pattern` pairs within the request. A pattern beginning with `+.` is normalized to a suffix rule, so `+.example.org` is stored as `example.org` with `type: "suffix"`.
+
 ### `PUT /api/rules/:id`
 
 Update a rule. Send `"exit_id": null` to clear the exit binding.

@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/docker/go-units"
 )
 
 const VPNNetwork = "vpn-net"
@@ -65,6 +66,8 @@ type RelayConfig struct {
 	Name       string
 	ListenPort int
 }
+
+const relayProfile = "low-latency-v1"
 
 func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) error {
 	containerName := "gluetun-" + cfg.Name
@@ -147,11 +150,23 @@ func (c *Client) CreateRelayContainer(ctx context.Context, cfg RelayConfig) erro
 	resp, err := c.cli.ContainerCreate(ctx,
 		&container.Config{
 			Image: imageRef,
-			Env:   []string{"RELAY_PORT=" + port},
+			Env: []string{
+				"RELAY_PORT=" + port,
+				"RELAY_RESOLVER=127.0.0.1",
+				"RELAY_DNS_VALID=300s",
+				"RELAY_RESOLVER_TIMEOUT=2s",
+				"RELAY_CONNECT_TIMEOUT=5s",
+				"SNI_RELAY_PROFILE=" + relayProfile,
+			},
 		},
 		&container.HostConfig{
 			NetworkMode:   container.NetworkMode("container:gluetun-" + cfg.Name),
 			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+			Resources: container.Resources{
+				Ulimits: []*units.Ulimit{
+					{Name: "nofile", Soft: 65535, Hard: 65535},
+				},
+			},
 		},
 		&network.NetworkingConfig{},
 		nil,
@@ -223,6 +238,25 @@ func (c *Client) GluetunNeedsUpgrade(ctx context.Context, name string, relayPort
 	}
 
 	expected := "FIREWALL_INPUT_PORTS=" + fmt.Sprintf("%d", relayPort)
+	for _, env := range info.Config.Env {
+		if env == expected {
+			return c.relayNeedsUpgrade(ctx, name)
+		}
+	}
+
+	return true, nil
+}
+
+func (c *Client) relayNeedsUpgrade(ctx context.Context, name string) (bool, error) {
+	info, err := c.cli.ContainerInspect(ctx, "relay-"+name)
+	if err != nil {
+		if client.IsErrNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	expected := "SNI_RELAY_PROFILE=" + relayProfile
 	for _, env := range info.Config.Env {
 		if env == expected {
 			return false, nil

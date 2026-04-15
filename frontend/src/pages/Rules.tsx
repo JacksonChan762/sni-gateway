@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getRules, createRule, updateRule, deleteRule, getExits, getApiError } from '../api/client'
+import { getRules, createRule, createRulesBulk, updateRule, deleteRule, getExits, getApiError } from '../api/client'
 import { type Rule } from '../api/client'
 import { Plus, Trash2, Pencil, X, ListFilter, Search } from 'lucide-react'
 import { useToast } from '../components/Toast'
@@ -22,6 +22,15 @@ export default function Rules() {
   const createMut = useMutation({
     mutationFn: createRule,
     onSuccess: () => { invalidate(); setShowForm(false); toast.success('Rule created') },
+    onError: err => toast.error(getApiError(err)),
+  })
+  const createBulkMut = useMutation({
+    mutationFn: createRulesBulk,
+    onSuccess: data => {
+      invalidate()
+      setShowForm(false)
+      toast.success(`${data.created_count} rules created`)
+    },
     onError: err => toast.error(getApiError(err)),
   })
   const updateMut = useMutation({
@@ -209,10 +218,11 @@ export default function Rules() {
           onClose={() => { setShowForm(false); setEditRule(null) }}
           onSubmit={data => {
             if (editRule) updateMut.mutate({ id: editRule.id, data })
+            else if (Array.isArray(data.rules)) createBulkMut.mutate(data.rules)
             else createMut.mutate(data)
           }}
-          loading={createMut.isPending || updateMut.isPending}
-          error={(createMut.error && getApiError(createMut.error)) || (updateMut.error && getApiError(updateMut.error)) || ''}
+          loading={createMut.isPending || createBulkMut.isPending || updateMut.isPending}
+          error={(createMut.error && getApiError(createMut.error)) || (createBulkMut.error && getApiError(createBulkMut.error)) || (updateMut.error && getApiError(updateMut.error)) || ''}
         />
       )}
     </div>
@@ -236,8 +246,34 @@ function RuleFormModal({
     priority: rule?.priority ?? 100,
     enabled: rule?.enabled ?? true,
   })
+  const [localError, setLocalError] = useState('')
 
   const set = (key: string, val: any) => setForm(f => ({ ...f, [key]: val }))
+  const patterns = rule ? [form.pattern.trim()].filter(Boolean) : parseRulePatterns(form.pattern)
+
+  const handleSubmit = () => {
+    if (patterns.length === 0) {
+      setLocalError('At least one pattern is required')
+      return
+    }
+    setLocalError('')
+
+    if (rule) {
+      onSubmit(form)
+      return
+    }
+
+    const rules = patterns.map(pattern => ({
+      pattern,
+      type: pattern.startsWith('+.') ? 'suffix' : form.type,
+      exit_id: form.exit_id,
+      priority: form.priority,
+      enabled: form.enabled,
+    }))
+    onSubmit(rules.length === 1 ? rules[0] : { rules })
+  }
+
+  const displayError = localError || error
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
@@ -248,21 +284,40 @@ function RuleFormModal({
         </div>
         <div className="p-5 space-y-4">
           <div>
-            <label className="label">Pattern *</label>
-            <input
-              className="input font-mono"
-              placeholder="example.com or +.example.com"
-              value={form.pattern}
-              onChange={e => {
-                const v = e.target.value
-                set('pattern', v)
-                if (v.startsWith('+.')) set('type', 'suffix')
-                else set('type', 'exact')
-              }}
-            />
-            <p className="text-xs text-gray-600 mt-1">
-              Prefix +. for suffix match (includes subdomains)
-            </p>
+            <label className="label">{rule ? 'Pattern *' : 'Patterns *'}</label>
+            {rule ? (
+              <input
+                className="input font-mono"
+                placeholder="example.com or +.example.com"
+                value={form.pattern}
+                onChange={e => {
+                  const v = e.target.value
+                  set('pattern', v)
+                  if (v.startsWith('+.')) set('type', 'suffix')
+                }}
+              />
+            ) : (
+              <textarea
+                className="input font-mono min-h-[150px] resize-y"
+                placeholder={'example.com\n+.example.org\napi.example.net'}
+                value={form.pattern}
+                onChange={e => {
+                  const v = e.target.value
+                  set('pattern', v)
+                  if (v.trimStart().startsWith('+.')) set('type', 'suffix')
+                }}
+              />
+            )}
+            <div className="flex items-center justify-between gap-3 mt-1">
+              <p className="text-xs text-gray-600">
+                Prefix +. for suffix match
+              </p>
+              {!rule && (
+                <span className="text-xs text-gray-500 tabular-nums">
+                  {patterns.length} {patterns.length === 1 ? 'rule' : 'rules'}
+                </span>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -312,9 +367,9 @@ function RuleFormModal({
             </div>
             <span className="text-sm text-gray-300">Active</span>
           </label>
-          {error && (
+          {displayError && (
             <div className="text-red-400 text-sm bg-red-950/40 border border-red-800/50 px-3 py-2.5 rounded-xl">
-              {error}
+              {displayError}
             </div>
           )}
         </div>
@@ -322,13 +377,28 @@ function RuleFormModal({
           <button className="btn-secondary" onClick={onClose}>Cancel</button>
           <button
             className="btn-primary"
-            disabled={loading || !form.pattern}
-            onClick={() => onSubmit(form)}
+            disabled={loading || patterns.length === 0}
+            onClick={handleSubmit}
           >
-            {loading ? 'Saving...' : rule ? 'Update Rule' : 'Create Rule'}
+            {loading ? 'Saving...' : rule ? 'Update Rule' : patterns.length > 1 ? `Create ${patterns.length} Rules` : 'Create Rule'}
           </button>
         </div>
       </div>
     </div>
   )
+}
+
+function parseRulePatterns(input: string) {
+  const seen = new Set<string>()
+  const patterns: string[] = []
+
+  for (const raw of input.split(/[\n,\s]+/)) {
+    const trimmed = raw.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    if (seen.has(trimmed)) continue
+    seen.add(trimmed)
+    patterns.push(trimmed)
+  }
+
+  return patterns
 }

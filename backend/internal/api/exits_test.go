@@ -52,3 +52,24 @@ func TestBuildExitConfigYAMLPreservesStoredEnvironment(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildManualRuleNormalizesPlusPrefix(t *testing.T) {
+	rule, err := buildManualRule(CreateRuleRequest{
+		Pattern:  " +.example.com ",
+		Type:     "exact",
+		Priority: 200,
+	})
+	if err != nil {
+		t.Fatalf("buildManualRule returned error: %v", err)
+	}
+
+	if rule.Pattern != "example.com" {
+		t.Fatalf("pattern = %q, want example.com", rule.Pattern)
+	}
+	if rule.Type != "suffix" {
+		t.Fatalf("type = %q, want suffix", rule.Type)
+	}
+	if rule.Priority != 200 {
+		t.Fatalf("priority = %d, want 200", rule.Priority)
+	}
+}

@@ -59,6 +59,10 @@ services:
   nginx:
     image: nginx:1.25-alpine
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     depends_on:
       backend:
         condition: service_healthy
