@@ -1,5 +1,7 @@
 # SNI Gateway
 
+[English](README.md) | [繁體中文](README.zh-TW.md)
+
 SNI Gateway is a web-managed TLS SNI routing gateway. It accepts HTTP/HTTPS traffic at the edge, matches domains against database-backed rules, and forwards matched HTTPS connections through selected VPN exits.
 
 ## Contents
