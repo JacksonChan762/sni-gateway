@@ -76,9 +76,56 @@ func TestValidateExitRequestAcceptsCustomWireguardFields(t *testing.T) {
 		WireguardPublicKey:    "public",
 		WireguardPrivKey:      "private",
 		WireguardAddresses:    "10.64.222.21/32",
+		WireguardDNS:          "1.1.1.1,8.8.8.8:53",
 	})
 	if err != nil {
 		t.Fatalf("validateExitRequest returned error: %v", err)
+	}
+}
+
+func TestValidateExitRequestRejectsCustomWireguardHostname(t *testing.T) {
+	err := validateExitRequest(CreateExitRequest{
+		Protocol:              "wireguard",
+		Provider:              "custom",
+		WireguardEndpointIP:   "vpn.example.com",
+		WireguardEndpointPort: "51820",
+		WireguardPublicKey:    "public",
+		WireguardPrivKey:      "private",
+		WireguardAddresses:    "10.64.222.21/32",
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be an IP address") {
+		t.Fatalf("error = %v, want endpoint IP validation error", err)
+	}
+}
+
+func TestValidateExitRequestRejectsCustomWireguardAddressWithoutCIDR(t *testing.T) {
+	err := validateExitRequest(CreateExitRequest{
+		Protocol:              "wireguard",
+		Provider:              "custom",
+		WireguardEndpointIP:   "203.0.113.10",
+		WireguardEndpointPort: "51820",
+		WireguardPublicKey:    "public",
+		WireguardPrivKey:      "private",
+		WireguardAddresses:    "10.64.222.21",
+	})
+	if err == nil || !strings.Contains(err.Error(), "CIDR") {
+		t.Fatalf("error = %v, want CIDR validation error", err)
+	}
+}
+
+func TestValidateExitRequestRejectsCustomWireguardDNSHostname(t *testing.T) {
+	err := validateExitRequest(CreateExitRequest{
+		Protocol:              "wireguard",
+		Provider:              "custom",
+		WireguardEndpointIP:   "203.0.113.10",
+		WireguardEndpointPort: "51820",
+		WireguardPublicKey:    "public",
+		WireguardPrivKey:      "private",
+		WireguardAddresses:    "10.64.222.21/32",
+		WireguardDNS:          "dns.example.com",
+	})
+	if err == nil || !strings.Contains(err.Error(), "wireguard_dns") {
+		t.Fatalf("error = %v, want DNS validation error", err)
 	}
 }
 
