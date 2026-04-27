@@ -15,7 +15,7 @@ type Config struct {
 	NginxPID                string
 	DefaultExit             string
 	DockerSocket            string
-	NightlyRestartExitsCron string
+	ExitRestartCron          string
 }
 
 func Load() *Config {
@@ -29,7 +29,7 @@ func Load() *Config {
 		NginxPID:                getEnv("NGINX_PID", "/var/run/nginx.pid"),
 		DefaultExit:             getEnv("DEFAULT_EXIT", "default"),
 		DockerSocket:            getEnv("DOCKER_SOCKET", "/var/run/docker.sock"),
-		NightlyRestartExitsCron: getEnv("NIGHTLY_RESTART_EXITS_CRON", "0 0 * * *"),
+		ExitRestartCron:          getEnv("EXIT_RESTART_CRON", getEnv("NIGHTLY_RESTART_EXITS_CRON", "@every 12h")),
 	}
 }
 

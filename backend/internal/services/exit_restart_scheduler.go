@@ -26,24 +26,24 @@ func (s *ExitRestartScheduler) Start() {
 		return
 	}
 	if s.spec == "" || strings.EqualFold(s.spec, "disabled") {
-		log.Println("Nightly enabled exit restart disabled")
+		log.Println("Scheduled enabled exit restart disabled")
 		return
 	}
 
 	if _, err := s.cron.AddFunc(s.spec, func() {
-		log.Println("Nightly enabled exit restart started")
+		log.Println("Scheduled enabled exit restart started")
 		if err := s.manager.RestartEnabledExits(); err != nil {
-			log.Printf("Nightly enabled exit restart failed: %v", err)
+			log.Printf("Scheduled enabled exit restart failed: %v", err)
 			return
 		}
-		log.Println("Nightly enabled exit restart completed")
+		log.Println("Scheduled enabled exit restart completed")
 	}); err != nil {
-		log.Printf("Failed to schedule nightly enabled exit restart %q: %v", s.spec, err)
+		log.Printf("Failed to schedule enabled exit restart %q: %v", s.spec, err)
 		return
 	}
 
 	s.cron.Start()
-	log.Printf("Nightly enabled exit restart scheduled with cron %q", s.spec)
+	log.Printf("Enabled exit restart scheduled with cron %q", s.spec)
 }
 
 func (s *ExitRestartScheduler) Stop() {

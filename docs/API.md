@@ -220,7 +220,7 @@ Notes:
 - WireGuard exits require `WIREGUARD_PRIVATE_KEY`.
 - OpenVPN exits require `OPENVPN_USER` and `OPENVPN_PASSWORD`.
 - Extra Gluetun environment variables are preserved across config round trips and passed to the Gluetun container.
-- `VPN_SERVICE_PROVIDER=custom` is supported; location fields may be blank for custom providers.
+- `VPN_SERVICE_PROVIDER=custom` is supported for WireGuard. Custom WireGuard exits require `WIREGUARD_ENDPOINT_IP`, `WIREGUARD_ENDPOINT_PORT`, `WIREGUARD_PUBLIC_KEY`, `WIREGUARD_PRIVATE_KEY`, and `WIREGUARD_ADDRESSES`; the UI can import wg0-style ini configs.
 
 ### `PUT /api/exits/:id`
 
@@ -781,7 +781,7 @@ openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 
 - Rules and subscription syncs do not automatically apply nginx config. Always call `POST /api/publish/apply` after routing changes.
 - `GET /api/exits/:id/config` returns compose-style YAML; extra `services.gluetun.environment` keys are preserved for editing and runtime creation.
-- Enabled exits restart automatically every night at server-local midnight by default. Set `NIGHTLY_RESTART_EXITS_CRON=disabled` to disable, or set another five-field cron expression.
+- Enabled exits restart automatically every 12 hours by default. Set `EXIT_RESTART_CRON=disabled` to disable, or set another cron expression such as `@every 6h`.
 - Matched port `80` traffic redirects to HTTPS. Matched port `443` traffic is forwarded by SNI through the selected relay/VPN exit.
 - The subscription list file is fetched with a 10 MB limit.
 - Subscription rules have priority `50`; manual rules default to `100`.

@@ -106,8 +106,16 @@ func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 	if exit.ConfigJSON != "" {
 		cfg := parseConfigJSON(exit.ConfigJSON)
 		gluetunCfg.ExtraEnv = extractStoredGluetunEnv(cfg)
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_public_key", "WIREGUARD_PUBLIC_KEY")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_endpoint_ip", "WIREGUARD_ENDPOINT_IP")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_endpoint_port", "WIREGUARD_ENDPOINT_PORT")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_preshared_key", "WIREGUARD_PRESHARED_KEY")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_allowed_ips", "WIREGUARD_ALLOWED_IPS")
 		if key, ok := cfg["wireguard_private_key"].(string); ok {
 			gluetunCfg.WireguardKey = key
+		}
+		if key, ok := cfg["wireguard_public_key"].(string); ok {
+			gluetunCfg.WireguardPubKey = key
 		}
 		if addr, ok := cfg["wireguard_addresses"].(string); ok {
 			gluetunCfg.WireguardAddr = addr
@@ -394,6 +402,15 @@ func parseConfigJSON(raw string) map[string]interface{} {
 	result := make(map[string]interface{})
 	json.Unmarshal([]byte(raw), &result)
 	return result
+}
+
+func copyRawConfigToEnv(raw map[string]interface{}, env map[string]string, rawKey, envKey string) {
+	if env == nil {
+		return
+	}
+	if value, ok := raw[rawKey]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+		env[envKey] = strings.TrimSpace(fmt.Sprint(value))
+	}
 }
 
 func extractStoredGluetunEnv(raw map[string]interface{}) map[string]string {

@@ -43,12 +43,17 @@ type CreateExitRequest struct {
 	Provider           string `json:"provider"`
 	Country            string `json:"country"`
 	City               string `json:"city"`
-	WireguardPrivKey   string `json:"wireguard_private_key"`
-	WireguardAddresses string `json:"wireguard_addresses"`
-	OpenVPNUser        string `json:"openvpn_user"`
-	OpenVPNPassword    string `json:"openvpn_password"`
-	ConfigYAML         string `json:"config_yaml"`
-	Enabled            *bool  `json:"enabled"`
+	WireguardPrivKey      string `json:"wireguard_private_key"`
+	WireguardPublicKey    string `json:"wireguard_public_key"`
+	WireguardEndpointIP   string `json:"wireguard_endpoint_ip"`
+	WireguardEndpointPort string `json:"wireguard_endpoint_port"`
+	WireguardPresharedKey string `json:"wireguard_preshared_key"`
+	WireguardAllowedIPs   string `json:"wireguard_allowed_ips"`
+	WireguardAddresses    string `json:"wireguard_addresses"`
+	OpenVPNUser           string `json:"openvpn_user"`
+	OpenVPNPassword       string `json:"openvpn_password"`
+	ConfigYAML            string `json:"config_yaml"`
+	Enabled               *bool  `json:"enabled"`
 }
 
 func (h *ExitHandler) Create(c *fiber.Ctx) error {
@@ -82,11 +87,8 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 	if req.Protocol != "wireguard" && req.Protocol != "openvpn" {
 		return c.Status(400).JSON(fiber.Map{"error": "protocol must be wireguard or openvpn"})
 	}
-	if req.Protocol == "wireguard" && req.WireguardPrivKey == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "wireguard_private_key is required for wireguard exits"})
-	}
-	if req.Protocol == "openvpn" && (req.OpenVPNUser == "" || req.OpenVPNPassword == "") {
-		return c.Status(400).JSON(fiber.Map{"error": "openvpn_user and openvpn_password are required for openvpn exits"})
+	if err := validateExitRequest(req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	enabled := true
@@ -201,6 +203,21 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		if req.WireguardPrivKey != "" {
 			creds["wireguard_private_key"] = req.WireguardPrivKey
 		}
+		if req.WireguardPublicKey != "" {
+			creds["wireguard_public_key"] = req.WireguardPublicKey
+		}
+		if req.WireguardEndpointIP != "" {
+			creds["wireguard_endpoint_ip"] = req.WireguardEndpointIP
+		}
+		if req.WireguardEndpointPort != "" {
+			creds["wireguard_endpoint_port"] = req.WireguardEndpointPort
+		}
+		if req.WireguardPresharedKey != "" {
+			creds["wireguard_preshared_key"] = req.WireguardPresharedKey
+		}
+		if req.WireguardAllowedIPs != "" {
+			creds["wireguard_allowed_ips"] = req.WireguardAllowedIPs
+		}
 		if req.WireguardAddresses != "" {
 			creds["wireguard_addresses"] = req.WireguardAddresses
 		}
@@ -215,6 +232,10 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 				exit.ConfigJSON = string(raw)
 			}
 		}
+	}
+
+	if err := validateExitConfig(&exit); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	if err := db.DB.Save(&exit).Error; err != nil {
@@ -254,6 +275,66 @@ func parseExitCredentials(raw string) map[string]string {
 	return result
 }
 
+func validateExitRequest(req CreateExitRequest) error {
+	if req.Protocol == "wireguard" && strings.EqualFold(req.Provider, "custom") {
+		if req.WireguardEndpointIP == "" {
+			return fmt.Errorf("wireguard_endpoint_ip is required for custom wireguard exits")
+		}
+		if req.WireguardEndpointPort == "" {
+			return fmt.Errorf("wireguard_endpoint_port is required for custom wireguard exits")
+		}
+		if req.WireguardPublicKey == "" {
+			return fmt.Errorf("wireguard_public_key is required for custom wireguard exits")
+		}
+		if req.WireguardPrivKey == "" {
+			return fmt.Errorf("wireguard_private_key is required for custom wireguard exits")
+		}
+		if req.WireguardAddresses == "" {
+			return fmt.Errorf("wireguard_addresses is required for custom wireguard exits")
+		}
+		return nil
+	}
+	if req.Protocol == "wireguard" && req.WireguardPrivKey == "" {
+		return fmt.Errorf("wireguard_private_key is required for wireguard exits")
+	}
+	if req.Protocol == "openvpn" && (req.OpenVPNUser == "" || req.OpenVPNPassword == "") {
+		return fmt.Errorf("openvpn_user and openvpn_password are required for openvpn exits")
+	}
+	return nil
+}
+
+func validateExitConfig(exit *models.Exit) error {
+	raw := map[string]interface{}{}
+	if exit.ConfigJSON != "" {
+		_ = json.Unmarshal([]byte(exit.ConfigJSON), &raw)
+	}
+	env := extractStoredComposeEnv(raw)
+	req := CreateExitRequest{
+		Protocol:               exit.Protocol,
+		Provider:               exit.Provider,
+		WireguardPrivKey:       firstConfigValue(env, raw, "WIREGUARD_PRIVATE_KEY", "wireguard_private_key"),
+		WireguardPublicKey:     firstConfigValue(env, raw, "WIREGUARD_PUBLIC_KEY", "wireguard_public_key"),
+		WireguardEndpointIP:    firstConfigValue(env, raw, "WIREGUARD_ENDPOINT_IP", "wireguard_endpoint_ip"),
+		WireguardEndpointPort:  firstConfigValue(env, raw, "WIREGUARD_ENDPOINT_PORT", "wireguard_endpoint_port"),
+		WireguardPresharedKey:  firstConfigValue(env, raw, "WIREGUARD_PRESHARED_KEY", "wireguard_preshared_key"),
+		WireguardAllowedIPs:    firstConfigValue(env, raw, "WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"),
+		WireguardAddresses:     firstConfigValue(env, raw, "WIREGUARD_ADDRESSES", "wireguard_addresses"),
+		OpenVPNUser:            firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
+		OpenVPNPassword:        firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
+	}
+	return validateExitRequest(req)
+}
+
+func firstConfigValue(env map[string]string, raw map[string]interface{}, envKey, rawKey string) string {
+	if value := strings.TrimSpace(env[envKey]); value != "" {
+		return value
+	}
+	if value, ok := raw[rawKey]; ok {
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+	return ""
+}
+
 func applyYAMLToExitRequest(req *CreateExitRequest) error {
 	raw := make(map[string]interface{})
 	if err := yaml.Unmarshal([]byte(req.ConfigYAML), &raw); err != nil {
@@ -288,6 +369,21 @@ func applyYAMLToExitRequest(req *CreateExitRequest) error {
 	}
 	if v := getString("wireguard_private_key"); v != "" {
 		req.WireguardPrivKey = v
+	}
+	if v := getString("wireguard_public_key"); v != "" {
+		req.WireguardPublicKey = v
+	}
+	if v := getString("wireguard_endpoint_ip"); v != "" {
+		req.WireguardEndpointIP = v
+	}
+	if v := getString("wireguard_endpoint_port"); v != "" {
+		req.WireguardEndpointPort = v
+	}
+	if v := getString("wireguard_preshared_key"); v != "" {
+		req.WireguardPresharedKey = v
+	}
+	if v := getString("wireguard_allowed_ips"); v != "" {
+		req.WireguardAllowedIPs = v
 	}
 	if v := getString("wireguard_addresses"); v != "" {
 		req.WireguardAddresses = v
@@ -354,6 +450,21 @@ func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest)
 	if v := env["WIREGUARD_PRIVATE_KEY"]; v != "" {
 		req.WireguardPrivKey = v
 	}
+	if v := env["WIREGUARD_PUBLIC_KEY"]; v != "" {
+		req.WireguardPublicKey = v
+	}
+	if v := env["WIREGUARD_ENDPOINT_IP"]; v != "" {
+		req.WireguardEndpointIP = v
+	}
+	if v := env["WIREGUARD_ENDPOINT_PORT"]; v != "" {
+		req.WireguardEndpointPort = v
+	}
+	if v := env["WIREGUARD_PRESHARED_KEY"]; v != "" {
+		req.WireguardPresharedKey = v
+	}
+	if v := env["WIREGUARD_ALLOWED_IPS"]; v != "" {
+		req.WireguardAllowedIPs = v
+	}
 	if v := env["WIREGUARD_ADDRESSES"]; v != "" {
 		req.WireguardAddresses = v
 	}
@@ -418,6 +529,21 @@ func buildExitConfigJSON(req CreateExitRequest) (string, error) {
 	if req.WireguardPrivKey != "" {
 		raw["wireguard_private_key"] = req.WireguardPrivKey
 	}
+	if req.WireguardPublicKey != "" {
+		raw["wireguard_public_key"] = req.WireguardPublicKey
+	}
+	if req.WireguardEndpointIP != "" {
+		raw["wireguard_endpoint_ip"] = req.WireguardEndpointIP
+	}
+	if req.WireguardEndpointPort != "" {
+		raw["wireguard_endpoint_port"] = req.WireguardEndpointPort
+	}
+	if req.WireguardPresharedKey != "" {
+		raw["wireguard_preshared_key"] = req.WireguardPresharedKey
+	}
+	if req.WireguardAllowedIPs != "" {
+		raw["wireguard_allowed_ips"] = req.WireguardAllowedIPs
+	}
 	if req.WireguardAddresses != "" {
 		raw["wireguard_addresses"] = req.WireguardAddresses
 	}
@@ -449,6 +575,11 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 	envMap["SERVER_COUNTRIES"] = exit.Country
 	envMap["SERVER_CITIES"] = exit.City
 	copyRawString(raw, envMap, "wireguard_private_key", "WIREGUARD_PRIVATE_KEY")
+	copyRawString(raw, envMap, "wireguard_public_key", "WIREGUARD_PUBLIC_KEY")
+	copyRawString(raw, envMap, "wireguard_endpoint_ip", "WIREGUARD_ENDPOINT_IP")
+	copyRawString(raw, envMap, "wireguard_endpoint_port", "WIREGUARD_ENDPOINT_PORT")
+	copyRawString(raw, envMap, "wireguard_preshared_key", "WIREGUARD_PRESHARED_KEY")
+	copyRawString(raw, envMap, "wireguard_allowed_ips", "WIREGUARD_ALLOWED_IPS")
 	copyRawString(raw, envMap, "wireguard_addresses", "WIREGUARD_ADDRESSES")
 	copyRawString(raw, envMap, "openvpn_user", "OPENVPN_USER")
 	copyRawString(raw, envMap, "openvpn_password", "OPENVPN_PASSWORD")
@@ -508,6 +639,21 @@ func orderedEnvironment(env map[string]string, protocol string) []string {
 		"SERVER_CITIES",
 		"WIREGUARD_PRIVATE_KEY",
 		"WIREGUARD_ADDRESSES",
+	}
+	if protocol == "wireguard" && strings.EqualFold(env["VPN_SERVICE_PROVIDER"], "custom") {
+		order = []string{
+			"VPN_SERVICE_PROVIDER",
+			"VPN_TYPE",
+			"WIREGUARD_ENDPOINT_IP",
+			"WIREGUARD_ENDPOINT_PORT",
+			"WIREGUARD_PUBLIC_KEY",
+			"WIREGUARD_PRIVATE_KEY",
+			"WIREGUARD_PRESHARED_KEY",
+			"WIREGUARD_ADDRESSES",
+			"WIREGUARD_ALLOWED_IPS",
+			"WIREGUARD_MTU",
+			"WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL",
+		}
 	}
 	if protocol == "openvpn" {
 		order = []string{

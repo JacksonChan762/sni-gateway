@@ -118,10 +118,10 @@ Environment variables passed to the backend:
 | `DATABASE_URL` | compose-managed | PostgreSQL connection string. |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket used to create exit containers. |
 | `NGINX_CONFIG_DIR` | `/etc/nginx/conf.d` | Shared volume where generated nginx config is written. |
-| `NIGHTLY_RESTART_EXITS_CRON` | `0 0 * * *` | Cron schedule for restarting all enabled exits; set to `disabled` to turn it off. |
+| `EXIT_RESTART_CRON` | `@every 12h` | Schedule for restarting all enabled exits; set to `disabled` to turn it off. |
 
 The backend needs Docker socket access because it creates and removes `gluetun-*` and `relay-*` containers when exits are started or deleted.
-All enabled exits are restarted nightly by default at server-local midnight.
+All enabled exits are restarted every 12 hours by default.
 
 ## Basic Workflow
 
@@ -193,7 +193,7 @@ curl -X POST http://127.0.0.1:8080/api/exits \
   }'
 ```
 
-Exit config is stored in normalized form. The UI edits `services.gluetun.environment` values and preserves additional Gluetun environment keys, including custom provider settings.
+Exit config is stored in normalized form. The UI edits `services.gluetun.environment` values and preserves additional Gluetun environment keys, including custom WireGuard provider settings from wg0-style configs.
 
 ### Add a Rule
 
@@ -284,7 +284,7 @@ openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 
 - Changing exits, rules, or subscriptions does not automatically publish nginx config. Run Publish → Apply after routing changes.
 - Running exits are reconciled automatically after name or runtime config changes; stopped exits are recreated on next start.
-- Enabled exits restart automatically every night at server-local midnight by default.
+- Enabled exits restart automatically every 12 hours by default.
 - Deleting an exit is blocked when active rules or active subscriptions still reference it. Disable or delete those dependencies first.
 - Disabling or deleting a subscription removes its generated rules and automatically reloads the generated nginx config.
 - The relay image (`sni-gateway-relay:latest`) is built by compose. Exit creation expects this image to exist, so always run `docker compose up --build` for the first start.
