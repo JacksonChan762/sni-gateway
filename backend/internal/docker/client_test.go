@@ -22,3 +22,23 @@ func TestOrderedGluetunEnvKeepsCustomKeys(t *testing.T) {
 		t.Fatalf("provider missing from ordered env: %v", env)
 	}
 }
+
+func TestIsContainerNamespaceRestartingError(t *testing.T) {
+	err := assertErrorString("create relay container: Error response from daemon: cannot join network namespace of container: Container abc is restarting, wait until the container is running")
+	if !isContainerNamespaceRestartingError(err) {
+		t.Fatal("expected restarting network namespace error to be retryable")
+	}
+}
+
+func TestContainerStateDetail(t *testing.T) {
+	got := containerStateDetail(1, "bad config")
+	if got != ": exit code 1, bad config" {
+		t.Fatalf("containerStateDetail() = %q", got)
+	}
+}
+
+type assertErrorString string
+
+func (e assertErrorString) Error() string {
+	return string(e)
+}

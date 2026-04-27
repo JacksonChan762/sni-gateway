@@ -196,7 +196,13 @@ func (em *ExitManager) Start(exit *models.Exit) error {
 		return nil
 	}
 
-	if err := em.docker.StartContainer(ctx, gluetunName); err != nil {
+	if gStatus != "running" && gStatus != "restarting" {
+		if err := em.docker.StartContainer(ctx, gluetunName); err != nil {
+			em.logEvent(exit.ID, "start", "failed", err.Error())
+			return err
+		}
+	}
+	if err := em.docker.WaitForContainerRunning(ctx, gluetunName); err != nil {
 		em.logEvent(exit.ID, "start", "failed", err.Error())
 		return err
 	}
@@ -285,8 +291,32 @@ func (em *ExitManager) Restart(exit *models.Exit) error {
 		return nil
 	}
 
-	_ = em.docker.RestartContainer(ctx, "relay-"+exit.Name)
-	if err := em.docker.RestartContainer(ctx, "gluetun-"+exit.Name); err != nil {
+	if gStatus != "restarting" {
+		if err := em.docker.RestartContainer(ctx, "gluetun-"+exit.Name); err != nil {
+			em.logEvent(exit.ID, "restart", "failed", err.Error())
+			return err
+		}
+	}
+	if err := em.docker.WaitForContainerRunning(ctx, "gluetun-"+exit.Name); err != nil {
+		em.logEvent(exit.ID, "restart", "failed", err.Error())
+		return err
+	}
+
+	rStatus, err := em.docker.GetContainerStatus(ctx, "relay-"+exit.Name)
+	if err != nil {
+		em.logEvent(exit.ID, "restart", "failed", err.Error())
+		return err
+	}
+	if rStatus == "not_found" {
+		relayCfg := docker.RelayConfig{
+			Name:       exit.Name,
+			ListenPort: relayPort,
+		}
+		if err := em.docker.CreateRelayContainer(ctx, relayCfg); err != nil {
+			em.logEvent(exit.ID, "restart", "failed", err.Error())
+			return err
+		}
+	} else if err := em.docker.RestartContainer(ctx, "relay-"+exit.Name); err != nil {
 		em.logEvent(exit.ID, "restart", "failed", err.Error())
 		return err
 	}

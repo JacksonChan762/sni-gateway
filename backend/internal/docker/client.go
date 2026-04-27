@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -70,6 +71,9 @@ type RelayConfig struct {
 }
 
 const relayProfile = "low-latency-v1"
+const containerRunningTimeout = 45 * time.Second
+const containerRunningPollInterval = 500 * time.Millisecond
+const containerRunningStableDuration = 2 * time.Second
 
 func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) error {
 	containerName := "gluetun-" + cfg.Name
@@ -135,7 +139,7 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 		return err
 	}
 
-	return nil
+	return c.WaitForContainerRunning(ctx, containerName)
 }
 
 func orderedGluetunEnv(env map[string]string, protocol string) []string {
@@ -192,6 +196,7 @@ func orderedGluetunEnv(env map[string]string, protocol string) []string {
 
 func (c *Client) CreateRelayContainer(ctx context.Context, cfg RelayConfig) error {
 	containerName := "relay-" + cfg.Name
+	gluetunName := "gluetun-" + cfg.Name
 	port := fmt.Sprintf("%d", cfg.ListenPort)
 	imageRef := "sni-gateway-relay:latest"
 
@@ -200,41 +205,65 @@ func (c *Client) CreateRelayContainer(ctx context.Context, cfg RelayConfig) erro
 		return fmt.Errorf("ensure relay image: %w", err)
 	}
 
-	// Relay shares gluetun's network namespace so all its outbound connections
-	// are routed through the VPN tunnel. The relay image is a nginx stream proxy
-	// that reads the TLS ClientHello SNI and connects to SNI_HOST:443 via VPN.
-	// No host-port publishing needed — nginx (gateway) reaches it via vpn-net.
-	// Build the image with: docker build -t sni-gateway-relay:latest ./relay
-	resp, err := c.cli.ContainerCreate(ctx,
-		&container.Config{
-			Image: imageRef,
-			Env: []string{
-				"RELAY_PORT=" + port,
-				"RELAY_RESOLVER=127.0.0.1",
-				"RELAY_DNS_VALID=300s",
-				"RELAY_RESOLVER_TIMEOUT=2s",
-				"RELAY_CONNECT_TIMEOUT=5s",
-				"SNI_RELAY_PROFILE=" + relayProfile,
-			},
-		},
-		&container.HostConfig{
-			NetworkMode:   container.NetworkMode("container:gluetun-" + cfg.Name),
-			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
-			Resources: container.Resources{
-				Ulimits: []*units.Ulimit{
-					{Name: "nofile", Soft: 65535, Hard: 65535},
+	deadline := time.Now().Add(containerRunningTimeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			remaining = containerRunningPollInterval
+		}
+		if err := c.waitForContainerRunning(ctx, gluetunName, remaining); err != nil {
+			return fmt.Errorf("wait for gluetun before creating relay: %w", err)
+		}
+
+		// Relay shares gluetun's network namespace so all its outbound connections
+		// are routed through the VPN tunnel. The relay image is a nginx stream proxy
+		// that reads the TLS ClientHello SNI and connects to SNI_HOST:443 via VPN.
+		// No host-port publishing needed - nginx (gateway) reaches it via vpn-net.
+		// Build the image with: docker build -t sni-gateway-relay:latest ./relay
+		resp, err := c.cli.ContainerCreate(ctx,
+			&container.Config{
+				Image: imageRef,
+				Env: []string{
+					"RELAY_PORT=" + port,
+					"RELAY_RESOLVER=127.0.0.1",
+					"RELAY_DNS_VALID=300s",
+					"RELAY_RESOLVER_TIMEOUT=2s",
+					"RELAY_CONNECT_TIMEOUT=5s",
+					"SNI_RELAY_PROFILE=" + relayProfile,
 				},
 			},
-		},
-		&network.NetworkingConfig{},
-		nil,
-		containerName,
-	)
-	if err != nil {
-		return fmt.Errorf("create relay container: %w", err)
-	}
+			&container.HostConfig{
+				NetworkMode:   container.NetworkMode("container:" + gluetunName),
+				RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+				Resources: container.Resources{
+					Ulimits: []*units.Ulimit{
+						{Name: "nofile", Soft: 65535, Hard: 65535},
+					},
+				},
+			},
+			&network.NetworkingConfig{},
+			nil,
+			containerName,
+		)
+		if err != nil {
+			wrappedErr := fmt.Errorf("create relay container: %w", err)
+			if !isContainerNamespaceRestartingError(wrappedErr) || time.Now().After(deadline) {
+				return wrappedErr
+			}
+			continue
+		}
 
-	return c.cli.ContainerStart(ctx, resp.ID, container.StartOptions{})
+		if err := c.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+			_ = c.RemoveContainer(ctx, containerName, true)
+			wrappedErr := fmt.Errorf("start relay container: %w", err)
+			if !isContainerNamespaceRestartingError(wrappedErr) || time.Now().After(deadline) {
+				return wrappedErr
+			}
+			continue
+		}
+
+		return nil
+	}
 }
 
 func (c *Client) StartContainer(ctx context.Context, name string) error {
@@ -276,6 +305,79 @@ func (c *Client) GetContainerStatus(ctx context.Context, name string) (string, e
 		return "", err
 	}
 	return info.State.Status, nil
+}
+
+func (c *Client) WaitForContainerRunning(ctx context.Context, name string) error {
+	return c.waitForContainerRunning(ctx, name, containerRunningTimeout)
+}
+
+func (c *Client) waitForContainerRunning(ctx context.Context, name string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = containerRunningTimeout
+	}
+
+	deadline := time.Now().Add(timeout)
+	lastStatus := "unknown"
+	runningSince := time.Time{}
+	for {
+		info, err := c.cli.ContainerInspect(ctx, name)
+		if err != nil {
+			if client.IsErrNotFound(err) {
+				return fmt.Errorf("%s container not found", name)
+			}
+			return fmt.Errorf("inspect %s: %w", name, err)
+		}
+
+		if info.State != nil {
+			lastStatus = info.State.Status
+			if info.State.Running && !info.State.Restarting {
+				if runningSince.IsZero() {
+					runningSince = time.Now()
+				}
+				if time.Since(runningSince) >= containerRunningStableDuration {
+					return nil
+				}
+			} else {
+				runningSince = time.Time{}
+			}
+			if info.State.Status == "dead" || info.State.Status == "exited" {
+				return fmt.Errorf("%s container is %s%s", name, info.State.Status, containerStateDetail(info.State.ExitCode, info.State.Error))
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s container did not become running within %s (last status: %s)", name, timeout, lastStatus)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(containerRunningPollInterval):
+		}
+	}
+}
+
+func containerStateDetail(exitCode int, stateErr string) string {
+	parts := make([]string, 0, 2)
+	if exitCode != 0 {
+		parts = append(parts, fmt.Sprintf("exit code %d", exitCode))
+	}
+	if strings.TrimSpace(stateErr) != "" {
+		parts = append(parts, strings.TrimSpace(stateErr))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(parts, ", ")
+}
+
+func isContainerNamespaceRestartingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "cannot join network namespace of container") &&
+		strings.Contains(msg, "is restarting")
 }
 
 func (c *Client) GluetunNeedsUpgrade(ctx context.Context, name string, relayPort int) (bool, error) {
