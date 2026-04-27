@@ -74,6 +74,27 @@ func TestBuildGluetunEnvMapDoesNotOverwriteStoredCredentialsWithBlankFields(t *t
 	}
 }
 
+func TestBuildGluetunEnvMapConvertsWireguardDNSToGluetunDNS(t *testing.T) {
+	env := buildGluetunEnvMap(GluetunConfig{
+		Name:     "custom",
+		Protocol: "wireguard",
+		Provider: "custom",
+		ExtraEnv: map[string]string{
+			"WIREGUARD_DNS": "1.1.1.1, 8.8.8.8:53",
+		},
+	})
+
+	if _, ok := env["WIREGUARD_DNS"]; ok {
+		t.Fatalf("WIREGUARD_DNS should not be passed directly to gluetun: %v", env)
+	}
+	if env["DNS_UPSTREAM_RESOLVER_TYPE"] != "plain" {
+		t.Fatalf("resolver type = %q, want plain", env["DNS_UPSTREAM_RESOLVER_TYPE"])
+	}
+	if env["DNS_UPSTREAM_PLAIN_ADDRESSES"] != "1.1.1.1:53,8.8.8.8:53" {
+		t.Fatalf("plain DNS = %q", env["DNS_UPSTREAM_PLAIN_ADDRESSES"])
+	}
+}
+
 func TestIsContainerNamespaceRestartingError(t *testing.T) {
 	err := assertErrorString("create relay container: Error response from daemon: cannot join network namespace of container: Container abc is restarting, wait until the container is running")
 	if !isContainerNamespaceRestartingError(err) {

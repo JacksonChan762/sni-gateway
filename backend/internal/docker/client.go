@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -93,8 +94,10 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 		},
 		&container.HostConfig{
 			CapAdd: []string{"NET_ADMIN"},
-			Devices: []container.DeviceMapping{
-				{PathOnHost: "/dev/net/tun", PathInContainer: "/dev/net/tun", CgroupPermissions: "rwm"},
+			Resources: container.Resources{
+				Devices: []container.DeviceMapping{
+					{PathOnHost: "/dev/net/tun", PathInContainer: "/dev/net/tun", CgroupPermissions: "rwm"},
+				},
 			},
 			Sysctls:       map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"},
 			NetworkMode:   container.NetworkMode(VPNNetwork),
@@ -157,7 +160,44 @@ func buildGluetunEnvMap(cfg GluetunConfig) map[string]string {
 	if cfg.RelayPort > 0 {
 		envMap["FIREWALL_INPUT_PORTS"] = fmt.Sprintf("%d", cfg.RelayPort)
 	}
+	applyWireguardDNSToGluetunEnv(envMap)
 	return envMap
+}
+
+func applyWireguardDNSToGluetunEnv(env map[string]string) {
+	dns := strings.TrimSpace(env["WIREGUARD_DNS"])
+	delete(env, "WIREGUARD_DNS")
+	if dns == "" || strings.TrimSpace(env["DNS_UPSTREAM_PLAIN_ADDRESSES"]) != "" {
+		return
+	}
+
+	addresses := make([]string, 0)
+	for _, item := range strings.Split(dns, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		addresses = append(addresses, normalizePlainDNSAddress(item))
+	}
+	if len(addresses) == 0 {
+		return
+	}
+
+	env["DNS_UPSTREAM_RESOLVER_TYPE"] = "plain"
+	env["DNS_UPSTREAM_PLAIN_ADDRESSES"] = strings.Join(addresses, ",")
+}
+
+func normalizePlainDNSAddress(value string) string {
+	if addrPort, err := netip.ParseAddrPort(value); err == nil {
+		return addrPort.String()
+	}
+	if addr, err := netip.ParseAddr(value); err == nil {
+		return netip.AddrPortFrom(addr, 53).String()
+	}
+	if strings.Count(value, ":") == 1 {
+		return value
+	}
+	return value + ":53"
 }
 
 func orderedGluetunEnv(env map[string]string, protocol string) []string {
@@ -175,6 +215,8 @@ func orderedGluetunEnv(env map[string]string, protocol string) []string {
 		"WIREGUARD_ALLOWED_IPS",
 		"WIREGUARD_MTU",
 		"WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL",
+		"DNS_UPSTREAM_RESOLVER_TYPE",
+		"DNS_UPSTREAM_PLAIN_ADDRESSES",
 		"FIREWALL_INPUT_PORTS",
 	}
 	if protocol == "openvpn" {
@@ -185,6 +227,8 @@ func orderedGluetunEnv(env map[string]string, protocol string) []string {
 			"SERVER_CITIES",
 			"OPENVPN_USER",
 			"OPENVPN_PASSWORD",
+			"DNS_UPSTREAM_RESOLVER_TYPE",
+			"DNS_UPSTREAM_PLAIN_ADDRESSES",
 			"FIREWALL_INPUT_PORTS",
 		}
 	}

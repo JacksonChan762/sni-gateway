@@ -23,7 +23,7 @@ const customWireguardOrder = [
   'WIREGUARD_ENDPOINT_IP', 'WIREGUARD_ENDPOINT_PORT',
   'WIREGUARD_PUBLIC_KEY', 'WIREGUARD_PRIVATE_KEY',
   'WIREGUARD_PRESHARED_KEY', 'WIREGUARD_ADDRESSES',
-  'WIREGUARD_ALLOWED_IPS', 'WIREGUARD_MTU',
+  'WIREGUARD_DNS', 'WIREGUARD_ALLOWED_IPS', 'WIREGUARD_MTU',
   'WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL',
 ]
 const openvpnOrder = [
@@ -41,6 +41,7 @@ const envLabels: Record<string, string> = {
   WIREGUARD_PRIVATE_KEY: 'WireGuard Private Key',
   WIREGUARD_PRESHARED_KEY: 'WireGuard Pre-shared Key',
   WIREGUARD_ADDRESSES: 'WireGuard Addresses',
+  WIREGUARD_DNS: 'WireGuard DNS',
   WIREGUARD_ALLOWED_IPS: 'WireGuard Allowed IPs',
   WIREGUARD_MTU: 'WireGuard MTU',
   WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL: 'WireGuard Keepalive',
@@ -171,6 +172,7 @@ function parseWireguardConfig(input: string) {
     if (section === 'interface') {
       if (key === 'privatekey') env.WIREGUARD_PRIVATE_KEY = value
       if (key === 'address') env.WIREGUARD_ADDRESSES = value
+      if (key === 'dns') env.WIREGUARD_DNS = value
       if (key === 'mtu') env.WIREGUARD_MTU = value
       continue
     }

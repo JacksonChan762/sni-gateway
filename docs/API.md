@@ -220,7 +220,7 @@ Notes:
 - WireGuard exits require `WIREGUARD_PRIVATE_KEY`.
 - OpenVPN exits require `OPENVPN_USER` and `OPENVPN_PASSWORD`.
 - Extra Gluetun environment variables are preserved across config round trips and passed to the Gluetun container.
-- `VPN_SERVICE_PROVIDER=custom` is supported for WireGuard. Custom WireGuard exits require `WIREGUARD_ENDPOINT_IP`, `WIREGUARD_ENDPOINT_PORT`, `WIREGUARD_PUBLIC_KEY`, `WIREGUARD_PRIVATE_KEY`, and `WIREGUARD_ADDRESSES`; the UI can import wg0-style ini configs.
+- `VPN_SERVICE_PROVIDER=custom` is supported for WireGuard. Custom WireGuard exits require `WIREGUARD_ENDPOINT_IP`, `WIREGUARD_ENDPOINT_PORT`, `WIREGUARD_PUBLIC_KEY`, `WIREGUARD_PRIVATE_KEY`, and `WIREGUARD_ADDRESSES`; the UI can import wg0-style ini configs. Imported `DNS = ...` values are stored as `WIREGUARD_DNS` and passed to Gluetun as plain upstream DNS addresses.
 
 ### `PUT /api/exits/:id`
 

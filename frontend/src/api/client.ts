@@ -105,7 +105,7 @@ export const getStats = () => api.get<Stats>('/stats').then(r => r.data)
 // ─── Exits ───────────────────────────────────────────────────────────────────
 
 export const getExits = () => api.get<Exit[]>('/exits').then(r => r.data)
-export const createExit = (data: Partial<Exit> & { config_yaml?: string; wireguard_private_key?: string; wireguard_addresses?: string; openvpn_user?: string; openvpn_password?: string }) =>
+export const createExit = (data: Partial<Exit> & { config_yaml?: string; wireguard_private_key?: string; wireguard_addresses?: string; wireguard_dns?: string; openvpn_user?: string; openvpn_password?: string }) =>
   api.post<Exit>('/exits', data).then(r => r.data)
 export const updateExit = (id: number, data: Partial<Exit> & { config_yaml?: string }) =>
   api.put<Exit>(`/exits/${id}`, data).then(r => r.data)

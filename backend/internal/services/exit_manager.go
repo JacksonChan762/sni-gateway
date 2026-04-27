@@ -111,6 +111,7 @@ func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_endpoint_port", "WIREGUARD_ENDPOINT_PORT")
 		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_preshared_key", "WIREGUARD_PRESHARED_KEY")
 		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_allowed_ips", "WIREGUARD_ALLOWED_IPS")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_dns", "WIREGUARD_DNS")
 		if key, ok := cfg["wireguard_private_key"].(string); ok {
 			gluetunCfg.WireguardKey = key
 		}

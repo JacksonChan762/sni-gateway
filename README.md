@@ -193,7 +193,7 @@ curl -X POST http://127.0.0.1:8080/api/exits \
   }'
 ```
 
-Exit config is stored in normalized form. The UI edits `services.gluetun.environment` values and preserves additional Gluetun environment keys, including custom WireGuard provider settings from wg0-style configs.
+Exit config is stored in normalized form. The UI edits `services.gluetun.environment` values and preserves additional Gluetun environment keys, including custom WireGuard provider settings from wg0-style configs. Imported WireGuard `DNS = ...` values are stored as `WIREGUARD_DNS` and translated to Gluetun plain upstream DNS settings.
 
 ### Add a Rule
 

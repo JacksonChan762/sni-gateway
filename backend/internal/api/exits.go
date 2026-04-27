@@ -51,6 +51,7 @@ type CreateExitRequest struct {
 	WireguardPresharedKey string `json:"wireguard_preshared_key"`
 	WireguardAllowedIPs   string `json:"wireguard_allowed_ips"`
 	WireguardAddresses    string `json:"wireguard_addresses"`
+	WireguardDNS          string `json:"wireguard_dns"`
 	OpenVPNUser           string `json:"openvpn_user"`
 	OpenVPNPassword       string `json:"openvpn_password"`
 	ConfigYAML            string `json:"config_yaml"`
@@ -222,6 +223,9 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		if req.WireguardAddresses != "" {
 			creds["wireguard_addresses"] = req.WireguardAddresses
 		}
+		if req.WireguardDNS != "" {
+			creds["wireguard_dns"] = req.WireguardDNS
+		}
 		if req.OpenVPNUser != "" {
 			creds["openvpn_user"] = req.OpenVPNUser
 		}
@@ -314,6 +318,9 @@ func validateExitRequest(req CreateExitRequest) error {
 		if !hasAddress {
 			return fmt.Errorf("wireguard_addresses must contain CIDR addresses for custom wireguard exits")
 		}
+		if err := validateWireguardDNS(req.WireguardDNS); err != nil {
+			return err
+		}
 		return nil
 	}
 	if req.Protocol == "wireguard" && req.WireguardPrivKey == "" {
@@ -323,6 +330,34 @@ func validateExitRequest(req CreateExitRequest) error {
 		return fmt.Errorf("openvpn_user and openvpn_password are required for openvpn exits")
 	}
 	return nil
+}
+
+func validateWireguardDNS(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, err := parseDNSAddress(item); err != nil {
+			return fmt.Errorf("wireguard_dns must contain IP addresses, optionally with ports")
+		}
+	}
+	return nil
+}
+
+func parseDNSAddress(value string) (string, error) {
+	if addrPort, err := netip.ParseAddrPort(value); err == nil {
+		return addrPort.String(), nil
+	}
+	addr, err := netip.ParseAddr(value)
+	if err != nil {
+		return "", err
+	}
+	return addr.String(), nil
 }
 
 func validateExitConfig(exit *models.Exit) error {
@@ -341,6 +376,7 @@ func validateExitConfig(exit *models.Exit) error {
 		WireguardPresharedKey:  firstConfigValue(env, raw, "WIREGUARD_PRESHARED_KEY", "wireguard_preshared_key"),
 		WireguardAllowedIPs:    firstConfigValue(env, raw, "WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"),
 		WireguardAddresses:     firstConfigValue(env, raw, "WIREGUARD_ADDRESSES", "wireguard_addresses"),
+		WireguardDNS:           firstConfigValue(env, raw, "WIREGUARD_DNS", "wireguard_dns"),
 		OpenVPNUser:            firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
 		OpenVPNPassword:        firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
 	}
@@ -409,6 +445,9 @@ func applyYAMLToExitRequest(req *CreateExitRequest) error {
 	}
 	if v := getString("wireguard_addresses"); v != "" {
 		req.WireguardAddresses = v
+	}
+	if v := getString("wireguard_dns"); v != "" {
+		req.WireguardDNS = v
 	}
 	if v := getString("openvpn_user"); v != "" {
 		req.OpenVPNUser = v
@@ -490,6 +529,9 @@ func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest)
 	if v := env["WIREGUARD_ADDRESSES"]; v != "" {
 		req.WireguardAddresses = v
 	}
+	if v := env["WIREGUARD_DNS"]; v != "" {
+		req.WireguardDNS = v
+	}
 	if v := env["OPENVPN_USER"]; v != "" {
 		req.OpenVPNUser = v
 	}
@@ -569,6 +611,9 @@ func buildExitConfigJSON(req CreateExitRequest) (string, error) {
 	if req.WireguardAddresses != "" {
 		raw["wireguard_addresses"] = req.WireguardAddresses
 	}
+	if req.WireguardDNS != "" {
+		raw["wireguard_dns"] = req.WireguardDNS
+	}
 	if req.OpenVPNUser != "" {
 		raw["openvpn_user"] = req.OpenVPNUser
 	}
@@ -603,6 +648,7 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 	copyRawString(raw, envMap, "wireguard_preshared_key", "WIREGUARD_PRESHARED_KEY")
 	copyRawString(raw, envMap, "wireguard_allowed_ips", "WIREGUARD_ALLOWED_IPS")
 	copyRawString(raw, envMap, "wireguard_addresses", "WIREGUARD_ADDRESSES")
+	copyRawString(raw, envMap, "wireguard_dns", "WIREGUARD_DNS")
 	copyRawString(raw, envMap, "openvpn_user", "OPENVPN_USER")
 	copyRawString(raw, envMap, "openvpn_password", "OPENVPN_PASSWORD")
 
@@ -672,6 +718,7 @@ func orderedEnvironment(env map[string]string, protocol string) []string {
 			"WIREGUARD_PRIVATE_KEY",
 			"WIREGUARD_PRESHARED_KEY",
 			"WIREGUARD_ADDRESSES",
+			"WIREGUARD_DNS",
 			"WIREGUARD_ALLOWED_IPS",
 			"WIREGUARD_MTU",
 			"WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL",
