@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/docker/docker/api/types"
@@ -60,6 +61,7 @@ type GluetunConfig struct {
 	WireguardAddr   string
 	OpenVPNUser     string
 	OpenVPNPass     string
+	ExtraEnv        map[string]string
 }
 
 type RelayConfig struct {
@@ -73,33 +75,37 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 	containerName := "gluetun-" + cfg.Name
 	imageRef := "qmcgaw/gluetun:latest"
 
-	env := []string{
-		"VPN_SERVICE_PROVIDER=" + cfg.Provider,
-		"VPN_TYPE=" + cfg.Protocol,
+	envMap := make(map[string]string, len(cfg.ExtraEnv)+8)
+	for key, value := range cfg.ExtraEnv {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			envMap[key] = value
+		}
 	}
+	envMap["VPN_SERVICE_PROVIDER"] = cfg.Provider
+	envMap["VPN_TYPE"] = cfg.Protocol
 	if cfg.Protocol == "wireguard" {
-		env = append(env, "WIREGUARD_PRIVATE_KEY="+cfg.WireguardKey)
+		envMap["WIREGUARD_PRIVATE_KEY"] = cfg.WireguardKey
 		if cfg.WireguardPubKey != "" {
-			env = append(env, "WIREGUARD_PUBLIC_KEY="+cfg.WireguardPubKey)
+			envMap["WIREGUARD_PUBLIC_KEY"] = cfg.WireguardPubKey
 		}
 		if cfg.WireguardAddr != "" {
-			env = append(env, "WIREGUARD_ADDRESSES="+cfg.WireguardAddr)
+			envMap["WIREGUARD_ADDRESSES"] = cfg.WireguardAddr
 		}
 	} else if cfg.Protocol == "openvpn" {
-		env = append(env,
-			"OPENVPN_USER="+cfg.OpenVPNUser,
-			"OPENVPN_PASSWORD="+cfg.OpenVPNPass,
-		)
+		envMap["OPENVPN_USER"] = cfg.OpenVPNUser
+		envMap["OPENVPN_PASSWORD"] = cfg.OpenVPNPass
 	}
 	if cfg.Country != "" {
-		env = append(env, "SERVER_COUNTRIES="+cfg.Country)
+		envMap["SERVER_COUNTRIES"] = cfg.Country
 	}
 	if cfg.City != "" {
-		env = append(env, "SERVER_CITIES="+cfg.City)
+		envMap["SERVER_CITIES"] = cfg.City
 	}
 	if cfg.RelayPort > 0 {
-		env = append(env, "FIREWALL_INPUT_PORTS="+fmt.Sprintf("%d", cfg.RelayPort))
+		envMap["FIREWALL_INPUT_PORTS"] = fmt.Sprintf("%d", cfg.RelayPort)
 	}
+	env := orderedGluetunEnv(envMap, cfg.Protocol)
 
 	_ = c.RemoveContainer(ctx, containerName, true)
 	if err := c.ensureImage(ctx, imageRef); err != nil {
@@ -130,6 +136,52 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 	}
 
 	return nil
+}
+
+func orderedGluetunEnv(env map[string]string, protocol string) []string {
+	order := []string{
+		"VPN_SERVICE_PROVIDER",
+		"VPN_TYPE",
+		"SERVER_COUNTRIES",
+		"SERVER_CITIES",
+		"WIREGUARD_PRIVATE_KEY",
+		"WIREGUARD_PUBLIC_KEY",
+		"WIREGUARD_ADDRESSES",
+		"FIREWALL_INPUT_PORTS",
+	}
+	if protocol == "openvpn" {
+		order = []string{
+			"VPN_SERVICE_PROVIDER",
+			"VPN_TYPE",
+			"SERVER_COUNTRIES",
+			"SERVER_CITIES",
+			"OPENVPN_USER",
+			"OPENVPN_PASSWORD",
+			"FIREWALL_INPUT_PORTS",
+		}
+	}
+
+	seen := make(map[string]bool, len(env))
+	result := make([]string, 0, len(env))
+	for _, key := range order {
+		if value, ok := env[key]; ok {
+			result = append(result, key+"="+value)
+			seen[key] = true
+		}
+	}
+
+	extras := make([]string, 0, len(env))
+	for key := range env {
+		if !seen[key] {
+			extras = append(extras, key)
+		}
+	}
+	sort.Strings(extras)
+	for _, key := range extras {
+		result = append(result, key+"="+env[key])
+	}
+
+	return result
 }
 
 func (c *Client) CreateRelayContainer(ctx context.Context, cfg RelayConfig) error {

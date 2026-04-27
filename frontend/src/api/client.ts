@@ -123,7 +123,7 @@ export const getExitStatus = (id: number) =>
 
 // ─── Rules ───────────────────────────────────────────────────────────────────
 
-export const getRules = () => api.get<Rule[]>('/rules').then(r => r.data)
+export const getRules = () => api.get<Rule[]>('/rules?source=manual').then(r => r.data)
 export const createRule = (data: Partial<Rule>) => api.post<Rule>('/rules', data).then(r => r.data)
 export const createRulesBulk = (rules: Partial<Rule>[]) =>
   api.post<{ created_count: number; rules: Rule[] }>('/rules/bulk', { rules }).then(r => r.data)

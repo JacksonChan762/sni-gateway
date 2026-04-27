@@ -118,8 +118,10 @@ http://127.0.0.1:8080
 | `DATABASE_URL` | 由 compose 管理 | PostgreSQL 連線字串。 |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | 用於建立出口容器的 Docker socket。 |
 | `NGINX_CONFIG_DIR` | `/etc/nginx/conf.d` | 生成的 nginx 設定寫入的共享目錄。 |
+| `NIGHTLY_RESTART_EXITS_CRON` | `0 0 * * *` | 重新啟動所有啟用出口的 Cron 排程；設為 `disabled` 可停用。 |
 
 後端需要 Docker socket 存取權限，因為它在出口啟動或刪除時會建立和移除 `gluetun-*` 與 `relay-*` 容器。
+預設會在伺服器本地時間每天午夜重新啟動所有啟用的出口。
 
 ## 基本使用流程
 
@@ -191,7 +193,7 @@ curl -X POST http://127.0.0.1:8080/api/exits \
   }'
 ```
 
-出口設定以標準化格式儲存。管理介面編輯 `services.gluetun.environment` 的值，並保留額外的 Gluetun 環境變數。
+出口設定以標準化格式儲存。管理介面編輯 `services.gluetun.environment` 的值，並保留額外的 Gluetun 環境變數，包含自訂供應商設定。
 
 ### 新增規則
 
@@ -281,7 +283,8 @@ openssl s_client -connect 你的伺服器IP:443 -servername example.com
 ## 運維注意事項
 
 - 變更出口、規則或訂閱不會自動發布 nginx 設定。路由變更後請執行「發布 → 套用」。
-- 更新出口設定只會變更資料庫狀態；需重新啟動出口才能以新設定重建容器。
+- 執行中的出口在名稱或 runtime 設定變更後會自動協調；已停止的出口會在下次啟動時重建。
+- 預設會在伺服器本地時間每天午夜重新啟動所有啟用的出口。
 - 當有作用中的規則或訂閱仍指向某個出口時，無法刪除該出口，請先停用或刪除這些相依項目。
 - 停用或刪除訂閱會移除其生成的規則，並自動重新載入 nginx 設定。
 - Relay 映像檔（`sni-gateway-relay:latest`）由 compose 建置。出口建立時需要此映像檔存在，因此首次啟動請務必執行 `docker compose up --build`。

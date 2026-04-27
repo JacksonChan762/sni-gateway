@@ -120,11 +120,27 @@ function validateExitForm(
   if (!name.trim()) return 'Name is required'
   const env = parseEnvYamlBlock(environmentYaml)
   if (!env.VPN_SERVICE_PROVIDER) return 'VPN_SERVICE_PROVIDER is required'
-  if (!env.SERVER_COUNTRIES && !env.SERVER_CITIES) return 'SERVER_COUNTRIES or SERVER_CITIES is required'
+  const provider = env.VPN_SERVICE_PROVIDER.trim().toLowerCase()
+  if (provider !== 'custom' && !env.SERVER_COUNTRIES && !env.SERVER_CITIES)
+    return 'SERVER_COUNTRIES or SERVER_CITIES is required'
   if (protocol === 'wireguard' && !env.WIREGUARD_PRIVATE_KEY) return 'WIREGUARD_PRIVATE_KEY is required'
   if (protocol === 'openvpn' && (!env.OPENVPN_USER || !env.OPENVPN_PASSWORD))
     return 'OPENVPN_USER and OPENVPN_PASSWORD are required'
   return ''
+}
+
+function normalizeEnvKey(key: string) {
+  return key.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+}
+
+function nextCustomEnvKey(env: Record<string, string>) {
+  let key = 'CUSTOM_KEY'
+  let i = 2
+  while (Object.prototype.hasOwnProperty.call(env, key)) {
+    key = `CUSTOM_KEY_${i}`
+    i += 1
+  }
+  return key
 }
 
 // ─── Status helpers ──────────────────────────────────────────────────────────
@@ -445,11 +461,36 @@ function ExitFormModal({
   const env = parseEnvYamlBlock(form.environment_yaml)
   const knownFields = form.protocol === 'openvpn' ? openvpnOrder : wireguardOrder
   const knownFieldSet = new Set(knownFields)
-  const fields = [...knownFields, ...Object.keys(env).filter(key => !knownFieldSet.has(key))]
+  const customFields = Object.keys(env).filter(key => !knownFieldSet.has(key))
 
   const updateEnvField = (key: string, value: string) => {
     const next = parseEnvYamlBlock(form.environment_yaml)
     next[key] = value
+    if (!next.VPN_TYPE) next.VPN_TYPE = form.protocol
+    setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, f.protocol) }))
+  }
+
+  const renameEnvField = (oldKey: string, rawKey: string) => {
+    const newKey = normalizeEnvKey(rawKey)
+    if (!newKey || newKey === oldKey) return
+    const next = parseEnvYamlBlock(form.environment_yaml)
+    const value = next[oldKey] ?? ''
+    delete next[oldKey]
+    next[newKey] = value
+    if (!next.VPN_TYPE) next.VPN_TYPE = form.protocol
+    setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, f.protocol) }))
+  }
+
+  const removeEnvField = (key: string) => {
+    const next = parseEnvYamlBlock(form.environment_yaml)
+    delete next[key]
+    if (!next.VPN_TYPE) next.VPN_TYPE = form.protocol
+    setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, f.protocol) }))
+  }
+
+  const addEnvField = () => {
+    const next = parseEnvYamlBlock(form.environment_yaml)
+    next[nextCustomEnvKey(next)] = ''
     if (!next.VPN_TYPE) next.VPN_TYPE = form.protocol
     setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, f.protocol) }))
   }
@@ -502,10 +543,8 @@ function ExitFormModal({
                 className="input"
                 placeholder="us"
                 value={form.name}
-                disabled={Boolean(exit)}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
               />
-              {exit && <p className="text-xs text-gray-600 mt-1">Name cannot be changed</p>}
             </div>
             <div className="flex items-end pb-1">
               <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -570,9 +609,20 @@ function ExitFormModal({
               {configLoading && (
                 <p className="text-xs text-gray-500">Loading current config...</p>
               )}
-              {fields.map(key => (
+              {knownFields.map(key => (
                 <div key={key}>
-                  <label className="label">{envLabels[key] ?? key}</label>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="label">{envLabels[key] ?? key}</label>
+                    {key === 'VPN_SERVICE_PROVIDER' && (
+                      <button
+                        type="button"
+                        className="text-xs text-indigo-400 hover:text-indigo-300"
+                        onClick={() => updateEnvField(key, 'custom')}
+                      >
+                        Custom
+                      </button>
+                    )}
+                  </div>
                   <input
                     className="input font-mono text-xs"
                     type={key.includes('PASSWORD') || key.includes('PRIVATE_KEY') ? 'password' : 'text'}
@@ -582,9 +632,41 @@ function ExitFormModal({
                   />
                 </div>
               ))}
+              {customFields.map(key => (
+                <div key={key} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_auto] gap-2 items-end">
+                  <div>
+                    <label className="label">Key</label>
+                    <input
+                      className="input font-mono text-xs"
+                      value={key}
+                      onChange={e => renameEnvField(key, e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Value</label>
+                    <input
+                      className="input font-mono text-xs"
+                      type={key.includes('PASSWORD') || key.includes('PRIVATE_KEY') ? 'password' : 'text'}
+                      value={env[key] ?? ''}
+                      onChange={e => updateEnvField(key, e.target.value)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-ghost p-2 mb-0.5 text-red-500 hover:text-red-400 hover:bg-red-950/30"
+                    onClick={() => removeEnvField(key)}
+                    title="Remove variable"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="btn-secondary text-xs" onClick={addEnvField}>
+                <Plus size={13} /> Add Variable
+              </button>
             </div>
             <p className="text-xs text-gray-600 mt-1.5">
-              SERVER_COUNTRIES or SERVER_CITIES is required · WIREGUARD_ADDRESSES is optional
+              Location is optional for custom providers · WIREGUARD_ADDRESSES is optional
             </p>
           </div>
 

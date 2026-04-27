@@ -143,12 +143,22 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Runtime = strings.TrimSpace(req.Runtime)
+	req.Protocol = strings.TrimSpace(req.Protocol)
+	req.Provider = strings.TrimSpace(req.Provider)
+	req.Country = strings.TrimSpace(req.Country)
+	req.City = strings.TrimSpace(req.City)
 	req.ConfigYAML = strings.TrimSpace(req.ConfigYAML)
 
 	if req.ConfigYAML != "" {
 		if err := applyYAMLToExitRequest(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
+	}
+
+	if req.Name != "" {
+		exit.Name = req.Name
 	}
 
 	if req.ConfigYAML != "" {
@@ -208,7 +218,7 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	}
 
 	if err := db.DB.Save(&exit).Error; err != nil {
-		return err
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	if err := h.manager.ReconcileAfterUpdate(&before, &exit); err != nil {
