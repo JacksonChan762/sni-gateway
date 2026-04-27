@@ -18,6 +18,14 @@ const wireguardOrder = [
   'VPN_SERVICE_PROVIDER', 'VPN_TYPE', 'SERVER_COUNTRIES', 'SERVER_CITIES',
   'WIREGUARD_PRIVATE_KEY', 'WIREGUARD_ADDRESSES',
 ]
+const customWireguardOrder = [
+  'VPN_SERVICE_PROVIDER', 'VPN_TYPE',
+  'WIREGUARD_ENDPOINT_IP', 'WIREGUARD_ENDPOINT_PORT',
+  'WIREGUARD_PUBLIC_KEY', 'WIREGUARD_PRIVATE_KEY',
+  'WIREGUARD_PRESHARED_KEY', 'WIREGUARD_ADDRESSES',
+  'WIREGUARD_ALLOWED_IPS', 'WIREGUARD_MTU',
+  'WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL',
+]
 const openvpnOrder = [
   'VPN_SERVICE_PROVIDER', 'VPN_TYPE', 'SERVER_COUNTRIES', 'SERVER_CITIES',
   'OPENVPN_USER', 'OPENVPN_PASSWORD',
@@ -27,10 +35,26 @@ const envLabels: Record<string, string> = {
   VPN_TYPE: 'Protocol',
   SERVER_COUNTRIES: 'Country',
   SERVER_CITIES: 'City',
+  WIREGUARD_ENDPOINT_IP: 'WireGuard Endpoint IP',
+  WIREGUARD_ENDPOINT_PORT: 'WireGuard Endpoint Port',
+  WIREGUARD_PUBLIC_KEY: 'WireGuard Server Public Key',
   WIREGUARD_PRIVATE_KEY: 'WireGuard Private Key',
+  WIREGUARD_PRESHARED_KEY: 'WireGuard Pre-shared Key',
   WIREGUARD_ADDRESSES: 'WireGuard Addresses',
+  WIREGUARD_ALLOWED_IPS: 'WireGuard Allowed IPs',
+  WIREGUARD_MTU: 'WireGuard MTU',
+  WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL: 'WireGuard Keepalive',
   OPENVPN_USER: 'OpenVPN Username',
   OPENVPN_PASSWORD: 'OpenVPN Password',
+}
+
+function isCustomProvider(env: Record<string, string>) {
+  return env.VPN_SERVICE_PROVIDER?.trim().toLowerCase() === 'custom'
+}
+
+function getOrderedEnvKeys(env: Record<string, string>, protocol: 'wireguard' | 'openvpn') {
+  if (protocol === 'openvpn') return openvpnOrder
+  return isCustomProvider(env) ? customWireguardOrder : wireguardOrder
 }
 
 function parseEnvYamlBlock(input: string): Record<string, string> {
@@ -55,7 +79,7 @@ function stringifyEnvYamlBlock(
   env: Record<string, string>,
   protocol: 'wireguard' | 'openvpn'
 ) {
-  const order = protocol === 'openvpn' ? openvpnOrder : wireguardOrder
+  const order = getOrderedEnvKeys(env, protocol)
   const orderedKeys = new Set(order)
   const extraKeys = Object.keys(env).filter(key => !orderedKeys.has(key))
   return [...order, ...extraKeys].map(key => `${key}=${env[key] ?? ''}`).join('\n') + '\n'
@@ -68,6 +92,16 @@ function convertEnvironmentBlock(
   const env = parseEnvYamlBlock(input)
   env.VPN_TYPE = protocol
   return stringifyEnvYamlBlock(env, protocol)
+}
+
+function applyCustomWireguardDefaults(env: Record<string, string>) {
+  const next = { ...env }
+  next.VPN_SERVICE_PROVIDER = 'custom'
+  next.VPN_TYPE = 'wireguard'
+  for (const key of customWireguardOrder) {
+    if (!(key in next)) next[key] = ''
+  }
+  return next
 }
 
 function buildComposeYaml(enabled: boolean, environmentYaml: string) {
@@ -112,6 +146,66 @@ function extractEnvironmentBlock(configYaml: string) {
   return extracted.length > 0 ? extracted.join('\n') + '\n' : ''
 }
 
+function parseWireguardConfig(input: string) {
+  const env: Record<string, string> = {
+    VPN_SERVICE_PROVIDER: 'custom',
+    VPN_TYPE: 'wireguard',
+  }
+  let section = ''
+
+  for (const rawLine of input.split('\n')) {
+    const line = rawLine.replace(/[;#].*$/, '').trim()
+    if (!line) continue
+    const sectionMatch = line.match(/^\[(.+)]$/)
+    if (sectionMatch) {
+      section = sectionMatch[1].trim().toLowerCase()
+      continue
+    }
+
+    const [rawKey, ...rawValue] = line.split('=')
+    if (!rawKey || rawValue.length === 0) continue
+    const key = rawKey.trim().toLowerCase()
+    const value = rawValue.join('=').trim()
+    if (!value) continue
+
+    if (section === 'interface') {
+      if (key === 'privatekey') env.WIREGUARD_PRIVATE_KEY = value
+      if (key === 'address') env.WIREGUARD_ADDRESSES = value
+      if (key === 'mtu') env.WIREGUARD_MTU = value
+      continue
+    }
+
+    if (section === 'peer') {
+      if (key === 'publickey') env.WIREGUARD_PUBLIC_KEY = value
+      if (key === 'presharedkey') env.WIREGUARD_PRESHARED_KEY = value
+      if (key === 'allowedips') env.WIREGUARD_ALLOWED_IPS = value
+      if (key === 'persistentkeepalive') {
+        env.WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL = /^\d+$/.test(value) ? `${value}s` : value
+      }
+      if (key === 'endpoint') {
+        const endpoint = parseWireguardEndpoint(value)
+        if (endpoint.host) env.WIREGUARD_ENDPOINT_IP = endpoint.host
+        if (endpoint.port) env.WIREGUARD_ENDPOINT_PORT = endpoint.port
+      }
+    }
+  }
+
+  return applyCustomWireguardDefaults(env)
+}
+
+function parseWireguardEndpoint(value: string) {
+  const trimmed = value.trim()
+  const ipv6 = trimmed.match(/^\[([^\]]+)]:(\d+)$/)
+  if (ipv6) return { host: ipv6[1], port: ipv6[2] }
+
+  const idx = trimmed.lastIndexOf(':')
+  if (idx === -1) return { host: trimmed, port: '' }
+  return {
+    host: trimmed.slice(0, idx),
+    port: trimmed.slice(idx + 1),
+  }
+}
+
 function validateExitForm(
   name: string,
   protocol: 'wireguard' | 'openvpn',
@@ -120,11 +214,34 @@ function validateExitForm(
   if (!name.trim()) return 'Name is required'
   const env = parseEnvYamlBlock(environmentYaml)
   if (!env.VPN_SERVICE_PROVIDER) return 'VPN_SERVICE_PROVIDER is required'
-  if (!env.SERVER_COUNTRIES && !env.SERVER_CITIES) return 'SERVER_COUNTRIES or SERVER_CITIES is required'
+  const isCustom = isCustomProvider(env)
+  if (protocol === 'wireguard' && isCustom) {
+    if (!env.WIREGUARD_ENDPOINT_IP) return 'WIREGUARD_ENDPOINT_IP is required for custom WireGuard exits'
+    if (!env.WIREGUARD_ENDPOINT_PORT) return 'WIREGUARD_ENDPOINT_PORT is required for custom WireGuard exits'
+    if (!env.WIREGUARD_PUBLIC_KEY) return 'WIREGUARD_PUBLIC_KEY is required for custom WireGuard exits'
+    if (!env.WIREGUARD_PRIVATE_KEY) return 'WIREGUARD_PRIVATE_KEY is required for custom WireGuard exits'
+    if (!env.WIREGUARD_ADDRESSES) return 'WIREGUARD_ADDRESSES is required for custom WireGuard exits'
+  }
   if (protocol === 'wireguard' && !env.WIREGUARD_PRIVATE_KEY) return 'WIREGUARD_PRIVATE_KEY is required'
+  if (!isCustom && !env.SERVER_COUNTRIES && !env.SERVER_CITIES)
+    return 'SERVER_COUNTRIES or SERVER_CITIES is required'
   if (protocol === 'openvpn' && (!env.OPENVPN_USER || !env.OPENVPN_PASSWORD))
     return 'OPENVPN_USER and OPENVPN_PASSWORD are required'
   return ''
+}
+
+function normalizeEnvKey(key: string) {
+  return key.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+}
+
+function nextCustomEnvKey(env: Record<string, string>) {
+  let key = 'CUSTOM_KEY'
+  let i = 2
+  while (Object.prototype.hasOwnProperty.call(env, key)) {
+    key = `CUSTOM_KEY_${i}`
+    i += 1
+  }
+  return key
 }
 
 // ─── Status helpers ──────────────────────────────────────────────────────────
@@ -443,9 +560,9 @@ function ExitFormModal({
   const [showPreview, setShowPreview] = useState(false)
 
   const env = parseEnvYamlBlock(form.environment_yaml)
-  const knownFields = form.protocol === 'openvpn' ? openvpnOrder : wireguardOrder
+  const knownFields = getOrderedEnvKeys(env, form.protocol)
   const knownFieldSet = new Set(knownFields)
-  const fields = [...knownFields, ...Object.keys(env).filter(key => !knownFieldSet.has(key))]
+  const customFields = Object.keys(env).filter(key => !knownFieldSet.has(key))
 
   const updateEnvField = (key: string, value: string) => {
     const next = parseEnvYamlBlock(form.environment_yaml)
@@ -454,11 +571,38 @@ function ExitFormModal({
     setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, f.protocol) }))
   }
 
+  const renameEnvField = (oldKey: string, rawKey: string) => {
+    const newKey = normalizeEnvKey(rawKey)
+    if (!newKey || newKey === oldKey) return
+    const next = parseEnvYamlBlock(form.environment_yaml)
+    const value = next[oldKey] ?? ''
+    delete next[oldKey]
+    next[newKey] = value
+    if (!next.VPN_TYPE) next.VPN_TYPE = form.protocol
+    setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, f.protocol) }))
+  }
+
+  const removeEnvField = (key: string) => {
+    const next = parseEnvYamlBlock(form.environment_yaml)
+    delete next[key]
+    if (!next.VPN_TYPE) next.VPN_TYPE = form.protocol
+    setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, f.protocol) }))
+  }
+
+  const addEnvField = () => {
+    const next = parseEnvYamlBlock(form.environment_yaml)
+    next[nextCustomEnvKey(next)] = ''
+    if (!next.VPN_TYPE) next.VPN_TYPE = form.protocol
+    setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, f.protocol) }))
+  }
+
   const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
     const content = await file.text()
-    const importedEnv = parseEnvYamlBlock(content)
+    const importedEnv = /\[(interface|peer)]/i.test(content)
+      ? parseWireguardConfig(content)
+      : parseEnvYamlBlock(content)
     const protocol = importedEnv.VPN_TYPE === 'openvpn' ? 'openvpn' : 'wireguard'
     setForm(f => ({ ...f, protocol, environment_yaml: stringifyEnvYamlBlock(importedEnv, protocol) }))
     setLocalError('')
@@ -502,10 +646,8 @@ function ExitFormModal({
                 className="input"
                 placeholder="us"
                 value={form.name}
-                disabled={Boolean(exit)}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
               />
-              {exit && <p className="text-xs text-gray-600 mt-1">Name cannot be changed</p>}
             </div>
             <div className="flex items-end pb-1">
               <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -557,10 +699,10 @@ function ExitFormModal({
             <input
               className="input text-xs"
               type="file"
-              accept=".env,.txt,.conf"
+              accept=".env,.txt,.conf,.ini,.wg"
               onChange={handleImportFile}
             />
-            <p className="text-xs text-gray-600 mt-1">Supports KEY=VALUE format files</p>
+            <p className="text-xs text-gray-600 mt-1">Supports KEY=VALUE and WireGuard wg0.conf files</p>
           </div>
 
           {/* Environment fields */}
@@ -570,9 +712,27 @@ function ExitFormModal({
               {configLoading && (
                 <p className="text-xs text-gray-500">Loading current config...</p>
               )}
-              {fields.map(key => (
+              {knownFields.map(key => (
                 <div key={key}>
-                  <label className="label">{envLabels[key] ?? key}</label>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="label">{envLabels[key] ?? key}</label>
+                    {key === 'VPN_SERVICE_PROVIDER' && (
+                      <button
+                        type="button"
+                        className="text-xs text-indigo-400 hover:text-indigo-300"
+                        onClick={() => {
+                          const next = applyCustomWireguardDefaults(parseEnvYamlBlock(form.environment_yaml))
+                          setForm(f => ({
+                            ...f,
+                            protocol: 'wireguard',
+                            environment_yaml: stringifyEnvYamlBlock(next, 'wireguard'),
+                          }))
+                        }}
+                      >
+                        Use Custom
+                      </button>
+                    )}
+                  </div>
                   <input
                     className="input font-mono text-xs"
                     type={key.includes('PASSWORD') || key.includes('PRIVATE_KEY') ? 'password' : 'text'}
@@ -582,9 +742,41 @@ function ExitFormModal({
                   />
                 </div>
               ))}
+              {customFields.map(key => (
+                <div key={key} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_auto] gap-2 items-end">
+                  <div>
+                    <label className="label">Key</label>
+                    <input
+                      className="input font-mono text-xs"
+                      value={key}
+                      onChange={e => renameEnvField(key, e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Value</label>
+                    <input
+                      className="input font-mono text-xs"
+                      type={key.includes('PASSWORD') || key.includes('PRIVATE_KEY') ? 'password' : 'text'}
+                      value={env[key] ?? ''}
+                      onChange={e => updateEnvField(key, e.target.value)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-ghost p-2 mb-0.5 text-red-500 hover:text-red-400 hover:bg-red-950/30"
+                    onClick={() => removeEnvField(key)}
+                    title="Remove variable"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="btn-secondary text-xs" onClick={addEnvField}>
+                <Plus size={13} /> Add Variable
+              </button>
             </div>
             <p className="text-xs text-gray-600 mt-1.5">
-              SERVER_COUNTRIES or SERVER_CITIES is required · WIREGUARD_ADDRESSES is optional
+              Custom WireGuard requires endpoint IP/port, server public key, private key, and addresses
             </p>
           </div>
 

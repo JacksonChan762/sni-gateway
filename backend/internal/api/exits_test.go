@@ -53,6 +53,35 @@ func TestBuildExitConfigYAMLPreservesStoredEnvironment(t *testing.T) {
 	}
 }
 
+func TestValidateExitRequestRequiresCustomWireguardFields(t *testing.T) {
+	err := validateExitRequest(CreateExitRequest{
+		Protocol:         "wireguard",
+		Provider:         "custom",
+		WireguardPrivKey: "private",
+	})
+	if err == nil {
+		t.Fatal("validateExitRequest returned nil, want missing custom field error")
+	}
+	if !strings.Contains(err.Error(), "wireguard_endpoint_ip") {
+		t.Fatalf("error = %q, want missing endpoint IP", err.Error())
+	}
+}
+
+func TestValidateExitRequestAcceptsCustomWireguardFields(t *testing.T) {
+	err := validateExitRequest(CreateExitRequest{
+		Protocol:              "wireguard",
+		Provider:              "custom",
+		WireguardEndpointIP:   "203.0.113.10",
+		WireguardEndpointPort: "51820",
+		WireguardPublicKey:    "public",
+		WireguardPrivKey:      "private",
+		WireguardAddresses:    "10.64.222.21/32",
+	})
+	if err != nil {
+		t.Fatalf("validateExitRequest returned error: %v", err)
+	}
+}
+
 func TestBuildManualRuleNormalizesPlusPrefix(t *testing.T) {
 	rule, err := buildManualRule(CreateRuleRequest{
 		Pattern:  " +.example.com ",

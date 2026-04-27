@@ -17,7 +17,6 @@ export default function Rules() {
   const [showForm, setShowForm] = useState(false)
   const [editRule, setEditRule] = useState<Rule | null>(null)
   const [search, setSearch] = useState('')
-  const [filterSource, setFilterSource] = useState<'all' | 'manual' | 'subscription'>('all')
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['rules'] })
 
@@ -56,14 +55,10 @@ export default function Rules() {
     if (ok) deleteMut.mutate(rule.id)
   }
 
-  const manualCount = rules.filter(r => r.source === 'manual').length
-  const subCount = rules.filter(r => r.source === 'subscription').length
-
   const filtered = rules.filter(r => {
     const matchSearch = !search || r.pattern.toLowerCase().includes(search.toLowerCase()) ||
       r.exit?.name?.toLowerCase().includes(search.toLowerCase())
-    const matchSource = filterSource === 'all' || r.source === filterSource
-    return matchSearch && matchSource
+    return matchSearch
   })
 
   return (
@@ -74,7 +69,7 @@ export default function Rules() {
         <div>
           <h1 className="page-title">Rules</h1>
           <p className="page-subtitle">
-            {rules.length} rules · {manualCount} manual · {subCount} from subscriptions
+            {rules.length} manual {rules.length === 1 ? 'rule' : 'rules'}
           </p>
         </div>
         <button className="btn-primary" onClick={() => setShowForm(true)}>
@@ -93,21 +88,6 @@ export default function Rules() {
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
-          </div>
-          <div className="flex gap-1">
-            {(['all', 'manual', 'subscription'] as const).map(s => (
-              <button
-                key={s}
-                onClick={() => setFilterSource(s)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize ${
-                  filterSource === s
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                {s}
-              </button>
-            ))}
           </div>
         </div>
       )}
@@ -149,7 +129,6 @@ export default function Rules() {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Type</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Exit</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Priority</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Source</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Status</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Actions</th>
                 </tr>
@@ -171,26 +150,19 @@ export default function Rules() {
                     </td>
                     <td className="px-4 py-3 text-gray-500 text-xs tabular-nums">{rule.priority}</td>
                     <td className="px-4 py-3">
-                      <span className={rule.source === 'manual' ? 'badge-gray' : 'badge-blue'}>
-                        {rule.source === 'manual' ? 'Manual' : 'Subscription'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
                       <span className={rule.enabled ? 'badge-green' : 'badge-gray'}>
                         {rule.enabled ? 'Active' : 'Disabled'}
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        {rule.source === 'manual' && (
-                          <button
-                            className="btn-ghost p-1.5"
-                            onClick={() => setEditRule(rule)}
-                            title="Edit"
-                          >
-                            <Pencil size={13} />
-                          </button>
-                        )}
+                        <button
+                          className="btn-ghost p-1.5"
+                          onClick={() => setEditRule(rule)}
+                          title="Edit"
+                        >
+                          <Pencil size={13} />
+                        </button>
                         <button
                           className="btn-ghost p-1.5 text-red-500 hover:text-red-400 hover:bg-red-950/30"
                           onClick={() => handleDelete(rule)}

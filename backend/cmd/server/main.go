@@ -46,6 +46,7 @@ func main() {
 	}
 	cfgGen := services.NewConfigGenerator(cfg.NginxConfigDir, cfg.NginxPID, reloader)
 	subMgr := services.NewSubscriptionManager(cfgGen)
+	restartScheduler := services.NewExitRestartScheduler(exitMgr, cfg.ExitRestartCron)
 
 	// Write initial sni_map.conf so nginx can start successfully
 	if err := cfgGen.WriteInitial(); err != nil {
@@ -56,6 +57,8 @@ func main() {
 
 	subMgr.Start()
 	defer subMgr.Stop()
+	restartScheduler.Start()
+	defer restartScheduler.Stop()
 
 	server := api.NewServer(cfg, exitMgr, subMgr, cfgGen)
 

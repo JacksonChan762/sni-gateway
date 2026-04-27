@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/docker"
@@ -50,19 +51,23 @@ func (em *ExitManager) ReconcileAfterUpdate(before, after *models.Exit) error {
 	em.logEvent(after.ID, "update", "started", "reconciling runtime")
 
 	if runtimeChanged {
-		_ = em.docker.RemoveContainer(ctx, "relay-"+after.Name, true)
-		_ = em.docker.RemoveContainer(ctx, "gluetun-"+after.Name, true)
+		for _, name := range changedRuntimeNames(before.Name, after.Name) {
+			_ = em.docker.RemoveContainer(ctx, "relay-"+name, true)
+			_ = em.docker.RemoveContainer(ctx, "gluetun-"+name, true)
+		}
 	}
 
 	if !after.Enabled {
-		_ = em.docker.RemoveContainer(ctx, "relay-"+after.Name, true)
-		_ = em.docker.RemoveContainer(ctx, "gluetun-"+after.Name, true)
+		for _, name := range changedRuntimeNames(before.Name, after.Name) {
+			_ = em.docker.RemoveContainer(ctx, "relay-"+name, true)
+			_ = em.docker.RemoveContainer(ctx, "gluetun-"+name, true)
+		}
 		em.updateStatus(after, "stopped")
 		em.logEvent(after.ID, "update", "success", "runtime disabled")
 		return nil
 	}
 
-	if runtimeChanged && before.Status == "stopped" {
+	if runtimeChanged && before.Enabled == after.Enabled && before.Status == "stopped" {
 		em.updateStatus(after, "stopped")
 		em.logEvent(after.ID, "update", "success", "runtime config saved; will recreate on next start")
 		return nil
@@ -100,8 +105,17 @@ func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 
 	if exit.ConfigJSON != "" {
 		cfg := parseConfigJSON(exit.ConfigJSON)
+		gluetunCfg.ExtraEnv = extractStoredGluetunEnv(cfg)
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_public_key", "WIREGUARD_PUBLIC_KEY")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_endpoint_ip", "WIREGUARD_ENDPOINT_IP")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_endpoint_port", "WIREGUARD_ENDPOINT_PORT")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_preshared_key", "WIREGUARD_PRESHARED_KEY")
+		copyRawConfigToEnv(cfg, gluetunCfg.ExtraEnv, "wireguard_allowed_ips", "WIREGUARD_ALLOWED_IPS")
 		if key, ok := cfg["wireguard_private_key"].(string); ok {
 			gluetunCfg.WireguardKey = key
+		}
+		if key, ok := cfg["wireguard_public_key"].(string); ok {
+			gluetunCfg.WireguardPubKey = key
 		}
 		if addr, ok := cfg["wireguard_addresses"].(string); ok {
 			gluetunCfg.WireguardAddr = addr
@@ -282,6 +296,30 @@ func (em *ExitManager) Restart(exit *models.Exit) error {
 	return nil
 }
 
+func (em *ExitManager) RestartEnabledExits() error {
+	var exits []models.Exit
+	if err := db.DB.Where("enabled = true").Order("id ASC").Find(&exits).Error; err != nil {
+		return err
+	}
+	if len(exits) == 0 {
+		log.Println("Enabled exit restart skipped: no enabled exits")
+		return nil
+	}
+
+	failures := make([]string, 0)
+	for i := range exits {
+		exit := exits[i]
+		if err := em.Restart(&exit); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", exit.Name, err))
+			continue
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("failed to restart %d of %d exits: %s", len(failures), len(exits), strings.Join(failures, "; "))
+	}
+	return nil
+}
+
 func (em *ExitManager) Delete(exit *models.Exit) error {
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.logEvent(exit.ID, "delete", "failed", err.Error())
@@ -366,6 +404,60 @@ func parseConfigJSON(raw string) map[string]interface{} {
 	return result
 }
 
+func copyRawConfigToEnv(raw map[string]interface{}, env map[string]string, rawKey, envKey string) {
+	if env == nil {
+		return
+	}
+	if value, ok := raw[rawKey]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+		env[envKey] = strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func extractStoredGluetunEnv(raw map[string]interface{}) map[string]string {
+	services, ok := raw["services"].(map[string]interface{})
+	if !ok {
+		return map[string]string{}
+	}
+
+	var service map[string]interface{}
+	if gluetun, ok := services["gluetun"].(map[string]interface{}); ok {
+		service = gluetun
+	} else {
+		for _, candidate := range services {
+			if asMap, ok := candidate.(map[string]interface{}); ok {
+				service = asMap
+				break
+			}
+		}
+	}
+	if service == nil {
+		return map[string]string{}
+	}
+
+	return normalizeStoredEnv(service["environment"])
+}
+
+func normalizeStoredEnv(raw interface{}) map[string]string {
+	result := make(map[string]string)
+
+	switch env := raw.(type) {
+	case map[string]interface{}:
+		for key, value := range env {
+			result[strings.TrimSpace(key)] = strings.TrimSpace(fmt.Sprint(value))
+		}
+	case []interface{}:
+		for _, item := range env {
+			kv := strings.TrimSpace(fmt.Sprint(item))
+			key, value, ok := strings.Cut(kv, "=")
+			if ok {
+				result[strings.TrimSpace(key)] = strings.TrimSpace(value)
+			}
+		}
+	}
+
+	return result
+}
+
 func exitRuntimeConfigChanged(before, after *models.Exit) bool {
 	if before.Name != after.Name {
 		return true
@@ -386,4 +478,11 @@ func exitRuntimeConfigChanged(before, after *models.Exit) bool {
 		return true
 	}
 	return before.ConfigJSON != after.ConfigJSON
+}
+
+func changedRuntimeNames(beforeName, afterName string) []string {
+	if beforeName == afterName {
+		return []string{afterName}
+	}
+	return []string{beforeName, afterName}
 }

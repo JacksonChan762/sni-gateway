@@ -19,7 +19,7 @@ func NewRuleHandler() *RuleHandler {
 func (h *RuleHandler) List(c *fiber.Ctx) error {
 	var rules []models.Rule
 	q := db.DB.Preload("Exit")
-	if source := c.Query("source"); source != "" {
+	if source := c.Query("source", "manual"); source != "" && source != "all" {
 		q = q.Where("source = ?", source)
 	}
 	if exitID := c.Query("exit_id"); exitID != "" {

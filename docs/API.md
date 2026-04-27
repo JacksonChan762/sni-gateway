@@ -219,7 +219,8 @@ Notes:
 - `config_yaml` environment may be a list of `KEY=VALUE` entries or a key-value mapping.
 - WireGuard exits require `WIREGUARD_PRIVATE_KEY`.
 - OpenVPN exits require `OPENVPN_USER` and `OPENVPN_PASSWORD`.
-- Extra Gluetun environment variables are preserved across config round trips.
+- Extra Gluetun environment variables are preserved across config round trips and passed to the Gluetun container.
+- `VPN_SERVICE_PROVIDER=custom` is supported for WireGuard. Custom WireGuard exits require `WIREGUARD_ENDPOINT_IP`, `WIREGUARD_ENDPOINT_PORT`, `WIREGUARD_PUBLIC_KEY`, `WIREGUARD_PRIVATE_KEY`, and `WIREGUARD_ADDRESSES`; the UI can import wg0-style ini configs.
 
 ### `PUT /api/exits/:id`
 
@@ -237,8 +238,8 @@ curl -X PUT http://127.0.0.1:8080/api/exits/8 \
 
 Notes:
 
-- Exit `name` cannot be changed.
-- Config changes update database state only. Restart the exit to recreate containers with new settings.
+- Exit `name` can be changed. If the running runtime needs to be recreated, old `gluetun-*` and `relay-*` containers are removed and recreated under the new name.
+- Config changes update database state first. Running exits are reconciled automatically when runtime-affecting fields change; stopped exits are recreated on next start.
 
 ### `DELETE /api/exits/:id`
 
@@ -391,11 +392,11 @@ Rules map a domain pattern to an exit. Higher-priority rules are evaluated first
 
 ### `GET /api/rules`
 
-List rules.
+List manual rules by default. Subscription-generated rules remain active for publishing/routing, but are hidden from the normal rules list unless explicitly requested.
 
 Query parameters:
 
-- `source` — filter by `manual` or `subscription`.
+- `source` — filter by `manual` or `subscription`; use `all` to include both.
 - `exit_id` — filter by exit ID.
 
 ```bash
@@ -779,8 +780,8 @@ openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 ## Runtime Notes
 
 - Rules and subscription syncs do not automatically apply nginx config. Always call `POST /api/publish/apply` after routing changes.
-- `GET /api/exits/:id/config` returns compose-style YAML; extra `services.gluetun.environment` keys are preserved for editing.
-- Exit config updates change database state only. Restart the exit to recreate containers with new settings.
+- `GET /api/exits/:id/config` returns compose-style YAML; extra `services.gluetun.environment` keys are preserved for editing and runtime creation.
+- Enabled exits restart automatically every 12 hours by default. Set `EXIT_RESTART_CRON=disabled` to disable, or set another cron expression such as `@every 6h`.
 - Matched port `80` traffic redirects to HTTPS. Matched port `443` traffic is forwarded by SNI through the selected relay/VPN exit.
 - The subscription list file is fetched with a 10 MB limit.
 - Subscription rules have priority `50`; manual rules default to `100`.
