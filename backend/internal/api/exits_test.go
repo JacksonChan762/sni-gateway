@@ -82,6 +82,36 @@ func TestValidateExitRequestAcceptsCustomWireguardFields(t *testing.T) {
 	}
 }
 
+func TestValidateExitRequestRejectsCustomWireguardHostname(t *testing.T) {
+	err := validateExitRequest(CreateExitRequest{
+		Protocol:              "wireguard",
+		Provider:              "custom",
+		WireguardEndpointIP:   "vpn.example.com",
+		WireguardEndpointPort: "51820",
+		WireguardPublicKey:    "public",
+		WireguardPrivKey:      "private",
+		WireguardAddresses:    "10.64.222.21/32",
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be an IP address") {
+		t.Fatalf("error = %v, want endpoint IP validation error", err)
+	}
+}
+
+func TestValidateExitRequestRejectsCustomWireguardAddressWithoutCIDR(t *testing.T) {
+	err := validateExitRequest(CreateExitRequest{
+		Protocol:              "wireguard",
+		Provider:              "custom",
+		WireguardEndpointIP:   "203.0.113.10",
+		WireguardEndpointPort: "51820",
+		WireguardPublicKey:    "public",
+		WireguardPrivKey:      "private",
+		WireguardAddresses:    "10.64.222.21",
+	})
+	if err == nil || !strings.Contains(err.Error(), "CIDR") {
+		t.Fatalf("error = %v, want CIDR validation error", err)
+	}
+}
+
 func TestBuildManualRuleNormalizesPlusPrefix(t *testing.T) {
 	rule, err := buildManualRule(CreateRuleRequest{
 		Pattern:  " +.example.com ",

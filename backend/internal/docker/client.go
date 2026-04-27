@@ -79,37 +79,7 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 	containerName := "gluetun-" + cfg.Name
 	imageRef := "qmcgaw/gluetun:latest"
 
-	envMap := make(map[string]string, len(cfg.ExtraEnv)+8)
-	for key, value := range cfg.ExtraEnv {
-		key = strings.TrimSpace(key)
-		if key != "" {
-			envMap[key] = value
-		}
-	}
-	envMap["VPN_SERVICE_PROVIDER"] = cfg.Provider
-	envMap["VPN_TYPE"] = cfg.Protocol
-	if cfg.Protocol == "wireguard" {
-		envMap["WIREGUARD_PRIVATE_KEY"] = cfg.WireguardKey
-		if cfg.WireguardPubKey != "" {
-			envMap["WIREGUARD_PUBLIC_KEY"] = cfg.WireguardPubKey
-		}
-		if cfg.WireguardAddr != "" {
-			envMap["WIREGUARD_ADDRESSES"] = cfg.WireguardAddr
-		}
-	} else if cfg.Protocol == "openvpn" {
-		envMap["OPENVPN_USER"] = cfg.OpenVPNUser
-		envMap["OPENVPN_PASSWORD"] = cfg.OpenVPNPass
-	}
-	if cfg.Country != "" {
-		envMap["SERVER_COUNTRIES"] = cfg.Country
-	}
-	if cfg.City != "" {
-		envMap["SERVER_CITIES"] = cfg.City
-	}
-	if cfg.RelayPort > 0 {
-		envMap["FIREWALL_INPUT_PORTS"] = fmt.Sprintf("%d", cfg.RelayPort)
-	}
-	env := orderedGluetunEnv(envMap, cfg.Protocol)
+	env := orderedGluetunEnv(buildGluetunEnvMap(cfg), cfg.Protocol)
 
 	_ = c.RemoveContainer(ctx, containerName, true)
 	if err := c.ensureImage(ctx, imageRef); err != nil {
@@ -122,7 +92,10 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 			Env:   env,
 		},
 		&container.HostConfig{
-			CapAdd:        []string{"NET_ADMIN"},
+			CapAdd: []string{"NET_ADMIN"},
+			Devices: []container.DeviceMapping{
+				{PathOnHost: "/dev/net/tun", PathInContainer: "/dev/net/tun", CgroupPermissions: "rwm"},
+			},
 			Sysctls:       map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"},
 			NetworkMode:   container.NetworkMode(VPNNetwork),
 			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
@@ -139,7 +112,52 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 		return err
 	}
 
-	return c.WaitForContainerRunning(ctx, containerName)
+	if err := c.WaitForContainerRunning(ctx, containerName); err != nil {
+		return c.errorWithContainerLogs(ctx, containerName, err)
+	}
+
+	return nil
+}
+
+func buildGluetunEnvMap(cfg GluetunConfig) map[string]string {
+	envMap := make(map[string]string, len(cfg.ExtraEnv)+8)
+	for key, value := range cfg.ExtraEnv {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			envMap[key] = value
+		}
+	}
+	envMap["VPN_SERVICE_PROVIDER"] = cfg.Provider
+	envMap["VPN_TYPE"] = cfg.Protocol
+	if cfg.Protocol == "wireguard" {
+		if cfg.WireguardKey != "" {
+			envMap["WIREGUARD_PRIVATE_KEY"] = cfg.WireguardKey
+		}
+		if cfg.WireguardPubKey != "" {
+			envMap["WIREGUARD_PUBLIC_KEY"] = cfg.WireguardPubKey
+		}
+		if cfg.WireguardAddr != "" {
+			envMap["WIREGUARD_ADDRESSES"] = cfg.WireguardAddr
+		}
+	} else if cfg.Protocol == "openvpn" {
+		if cfg.OpenVPNUser != "" {
+			envMap["OPENVPN_USER"] = cfg.OpenVPNUser
+		}
+		if cfg.OpenVPNPass != "" {
+			envMap["OPENVPN_PASSWORD"] = cfg.OpenVPNPass
+		}
+	}
+	if cfg.Country != "" {
+		envMap["SERVER_COUNTRIES"] = cfg.Country
+	}
+	if cfg.City != "" {
+		envMap["SERVER_CITIES"] = cfg.City
+	}
+	if cfg.RelayPort > 0 {
+		envMap["FIREWALL_INPUT_PORTS"] = fmt.Sprintf("%d", cfg.RelayPort)
+	}
+	return envMap
 }
 
 func orderedGluetunEnv(env map[string]string, protocol string) []string {
@@ -371,6 +389,41 @@ func containerStateDetail(exitCode int, stateErr string) string {
 	return ": " + strings.Join(parts, ", ")
 }
 
+func (c *Client) errorWithContainerLogs(ctx context.Context, name string, err error) error {
+	logs, logsErr := c.containerLogsTail(ctx, name, 40)
+	if logsErr != nil || strings.TrimSpace(logs) == "" {
+		return err
+	}
+	return fmt.Errorf("%w; gluetun logs:\n%s", err, strings.TrimSpace(logs))
+}
+
+func (c *Client) containerLogsTail(ctx context.Context, name string, tail int) (string, error) {
+	opts := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       fmt.Sprintf("%d", tail),
+	}
+	rc, err := c.cli.ContainerLogs(ctx, name, opts)
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+
+	buf := new(strings.Builder)
+	errBuf := new(strings.Builder)
+	if _, err = stdcopy.StdCopy(buf, errBuf, rc); err != nil {
+		return "", err
+	}
+	output := strings.TrimSpace(buf.String())
+	if strings.TrimSpace(errBuf.String()) != "" {
+		if output != "" {
+			output += "\n"
+		}
+		output += strings.TrimSpace(errBuf.String())
+	}
+	return output, nil
+}
+
 func isContainerNamespaceRestartingError(err error) bool {
 	if err == nil {
 		return false
@@ -427,26 +480,7 @@ func (c *Client) relayNeedsUpgrade(ctx context.Context, name string) (bool, erro
 }
 
 func (c *Client) GetContainerLogs(ctx context.Context, name string, tail int) (string, error) {
-	opts := container.LogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-		Tail:       fmt.Sprintf("%d", tail),
-	}
-	rc, err := c.cli.ContainerLogs(ctx, name, opts)
-	if err != nil {
-		return "", err
-	}
-	defer rc.Close()
-
-	buf := new(strings.Builder)
-	errBuf := new(strings.Builder)
-	if _, err = stdcopy.StdCopy(buf, errBuf, rc); err != nil {
-		return "", err
-	}
-	if errBuf.Len() > 0 && buf.Len() == 0 {
-		return errBuf.String(), nil
-	}
-	return buf.String(), nil
+	return c.containerLogsTail(ctx, name, tail)
 }
 
 type ContainerInfo struct {

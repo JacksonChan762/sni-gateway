@@ -129,6 +129,7 @@ func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 	}
 
 	if err := em.docker.CreateGluetunContainer(ctx, gluetunCfg); err != nil {
+		_ = em.docker.RemoveContainer(ctx, "gluetun-"+exit.Name, true)
 		em.updateStatus(exit, "unhealthy")
 		em.logEvent(exit.ID, "create", "failed", err.Error())
 		return fmt.Errorf("create gluetun: %w", err)

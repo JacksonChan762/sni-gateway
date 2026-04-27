@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -291,6 +292,27 @@ func validateExitRequest(req CreateExitRequest) error {
 		}
 		if req.WireguardAddresses == "" {
 			return fmt.Errorf("wireguard_addresses is required for custom wireguard exits")
+		}
+		if _, err := netip.ParseAddr(req.WireguardEndpointIP); err != nil {
+			return fmt.Errorf("wireguard_endpoint_ip must be an IP address for custom wireguard exits")
+		}
+		port, err := strconv.Atoi(req.WireguardEndpointPort)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("wireguard_endpoint_port must be a valid port for custom wireguard exits")
+		}
+		hasAddress := false
+		for _, address := range strings.Split(req.WireguardAddresses, ",") {
+			address = strings.TrimSpace(address)
+			if address == "" {
+				continue
+			}
+			if _, err := netip.ParsePrefix(address); err != nil {
+				return fmt.Errorf("wireguard_addresses must contain CIDR addresses for custom wireguard exits")
+			}
+			hasAddress = true
+		}
+		if !hasAddress {
+			return fmt.Errorf("wireguard_addresses must contain CIDR addresses for custom wireguard exits")
 		}
 		return nil
 	}
