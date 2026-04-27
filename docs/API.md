@@ -425,7 +425,7 @@ Fields:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `pattern` | string | Required. Hostname or domain. |
-| `type` | `exact` \| `suffix` | Required. `suffix` matches the domain and all subdomains. |
+| `type` | `auto` \| `exact` \| `suffix` | Optional. Defaults to `auto`; `+.` patterns become suffix matches, otherwise exact. `suffix` matches the domain and all subdomains. |
 | `exit_id` | integer \| null | Must reference an existing exit when non-null. |
 | `priority` | integer | Default `100` when omitted or `0`. Higher = evaluated first. |
 | `enabled` | bool | Default `true`. |
@@ -460,7 +460,7 @@ curl -X POST http://127.0.0.1:8080/api/rules/bulk \
   }'
 ```
 
-The bulk endpoint accepts up to `5000` rules per request and de-duplicates identical `type` + `pattern` pairs within the request. A pattern beginning with `+.` is normalized to a suffix rule, so `+.example.org` is stored as `example.org` with `type: "suffix"`.
+The bulk endpoint accepts up to `5000` rules per request and de-duplicates identical `type` + `pattern` pairs within the request after type detection. A pattern beginning with `+.` is normalized to a suffix rule, so `+.example.org` is stored as `example.org` with `type: "suffix"`.
 
 ### `PUT /api/rules/:id`
 
