@@ -47,7 +47,7 @@ The stack:
 - **React admin UI** — served by the backend; communicates with the API using a JWT token.
 - **PostgreSQL** — stores exits, rules, subscriptions, and publish history.
 
-Rules are stored in the database. They become active in nginx only after you publish and apply the generated config.
+Rules are stored in the database. Publish and apply manual changes to activate them in nginx; subscription syncs also automatically publish the generated configuration.
 
 ## Prerequisites
 
@@ -123,6 +123,19 @@ Environment variables passed to the backend:
 The backend needs Docker socket access because it creates and removes `gluetun-*` and `relay-*` containers when exits are started or deleted.
 All enabled exits are restarted every 12 hours by default.
 
+## Automatic Updates
+
+- **Application:** optional daily updates with database backups and service health checks. See [setup and recovery instructions](docs/UPDATES.md).
+- **Dashboard:** live status every 15 seconds, with pause and manual refresh controls.
+- **Subscriptions:** enabled lists sync on their configured schedule and automatically publish routing changes.
+
+```bash
+bash scripts/update.sh --check
+bash scripts/update.sh --apply
+```
+
+Docker builds the UI directly from source, so application updates include frontend changes.
+
 ## Basic Workflow
 
 1. Sign in to the admin UI at `http://127.0.0.1:8080`.
@@ -132,7 +145,7 @@ All enabled exits are restarted every 12 hours by default.
 5. Go to Publish → preview → apply to write and reload nginx config.
 6. Test the target domain through the gateway.
 
-Rules and subscriptions are stored in the database first. They do not affect nginx until you apply the generated config.
+Manual routing changes require Publish → Apply. Successful subscription syncs automatically regenerate and reload nginx configuration, including any pending manual routing changes.
 
 ## Subscription List Format
 
@@ -282,7 +295,7 @@ openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 
 ## Operations Notes
 
-- Changing exits, rules, or subscriptions does not automatically publish nginx config. Run Publish → Apply after routing changes.
+- Run Publish → Apply after manual routing changes. Subscription syncs automatically publish the generated config, including pending manual changes.
 - Running exits are reconciled automatically after name or runtime config changes; stopped exits are recreated on next start.
 - Enabled exits restart automatically every 12 hours by default.
 - Deleting an exit is blocked when active rules or active subscriptions still reference it. Disable or delete those dependencies first.

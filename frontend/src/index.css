@@ -8,6 +8,11 @@
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
+  :focus-visible {
+    outline: 2px solid #818cf8;
+    outline-offset: 3px;
+  }
+
   * {
     @apply border-gray-800;
   }
@@ -116,7 +121,7 @@
 
   /* Page header */
   .page-header {
-    @apply flex items-center justify-between mb-6;
+    @apply flex flex-wrap gap-3 items-center justify-between mb-6;
   }
   .page-title {
     @apply text-2xl font-bold text-white tracking-tight;
@@ -144,4 +149,8 @@
 
 .animate-slide-in {
   animation: slide-in 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }

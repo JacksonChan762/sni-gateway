@@ -122,6 +122,7 @@ export default function App() {
                     onClick={handleLogout}
                     className="text-gray-500 hover:text-red-400 transition-colors p-1"
                     title="Sign out"
+                    aria-label="Sign out"
                   >
                     <LogOut size={14} />
                   </button>
@@ -143,6 +144,8 @@ export default function App() {
               {/* Mobile header */}
               <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-900 flex-shrink-0">
                 <button
+                  aria-label="Open navigation"
+                  aria-expanded={mobileOpen}
                   onClick={() => setMobileOpen(true)}
                   className="text-gray-400 hover:text-white transition-colors p-1"
                 >
@@ -150,6 +153,7 @@ export default function App() {
                 </button>
                 <span className="font-semibold text-white">SNI Gateway</span>
                 <button
+                  aria-label="Sign out"
                   onClick={handleLogout}
                   className="text-gray-500 hover:text-red-400 transition-colors p-1"
                 >
@@ -159,7 +163,7 @@ export default function App() {
 
               {/* Page content */}
               <main className="flex-1 overflow-y-auto">
-                <div className="p-6 max-w-6xl">
+                <div className="p-4 sm:p-6 max-w-6xl">
                   <Routes>
                     <Route path="/" element={<Dashboard />} />
                     <Route path="/exits" element={<Exits />} />

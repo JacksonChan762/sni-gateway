@@ -16,7 +16,7 @@ export default function Subscriptions() {
   const qc = useQueryClient()
   const toast = useToast()
   const { confirm, modal: confirmModal } = useConfirm()
-  const { data: subs = [], isLoading } = useQuery({ queryKey: ['subscriptions'], queryFn: getSubscriptions })
+  const { data: subs = [], isLoading, error, refetch } = useQuery({ queryKey: ['subscriptions'], queryFn: getSubscriptions, refetchInterval: 15_000 })
   const { data: exits = [] } = useQuery({ queryKey: ['exits'], queryFn: getExits })
   const [showForm, setShowForm] = useState(false)
   const [editSub, setEditSub] = useState<Subscription | null>(null)
@@ -77,6 +77,11 @@ export default function Subscriptions() {
         </button>
       </div>
 
+      <p className="text-sm text-gray-400">Enabled lists sync and publish routing changes automatically. Status refreshes every 15 seconds.</p>
+      {error && <div role="alert" className="card border-red-800 text-red-300 text-sm">
+        Could not refresh subscriptions: {getApiError(error)}
+        <button className="btn-secondary ml-3" onClick={() => void refetch()}>Retry</button>
+      </div>}
       {isLoading ? (
         <div className="card flex items-center justify-center py-16">
           <div className="text-gray-500 text-sm flex items-center gap-2">
@@ -87,7 +92,7 @@ export default function Subscriptions() {
             Loading subscriptions...
           </div>
         </div>
-      ) : subs.length === 0 ? (
+      ) : error && subs.length === 0 ? null : subs.length === 0 ? (
         <div className="card">
           <div className="empty-state">
             <div className="w-14 h-14 rounded-2xl bg-gray-800 flex items-center justify-center mb-4">
@@ -176,7 +181,7 @@ function SubCard({
 
           <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
             <span className="badge-gray">{sub.rule_count} rules</span>
-            <span>Syncs every {sub.interval_minutes} min</span>
+            <span>{sub.enabled ? `Syncs every ${sub.interval_minutes} min` : 'Automatic sync paused'}</span>
             {sub.last_sync_at && (
               <span className="flex items-center gap-1">
                 {syncIcon}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for SNI Gateway updates daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

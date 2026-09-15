@@ -314,3 +314,15 @@ npm run build
 ## 文件
 
 - API 參考：[docs/API.md](docs/API.md)
+
+## 自動更新
+
+- 應用程式：支援選用的每日自動更新、資料庫備份與服務健康檢查。設定及復原步驟請參閱 [更新指南（英文）](docs/UPDATES.md)。
+- 儀表板：每 15 秒重新整理，可暫停或手動更新，並提供初次設定指引。
+- 訂閱：啟用的清單依設定排程同步，成功後會自動發布路由設定（包含尚未發布的手動變更）。
+- Docker 會直接從原始碼建置前端，更新時不需在主機安裝 Node.js。
+
+```bash
+bash scripts/update.sh --check
+bash scripts/update.sh --apply
+```

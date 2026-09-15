@@ -1,0 +1,13 @@
+[Unit]
+Description=Update SNI Gateway from its configured upstream branch
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Change this path to your dedicated deployment checkout.
+WorkingDirectory=/opt/sni-gateway
+ExecStart=/usr/bin/bash /opt/sni-gateway/scripts/update.sh --apply
+UMask=0077
+TimeoutStartSec=30min

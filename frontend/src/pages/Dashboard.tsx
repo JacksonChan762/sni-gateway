@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { getStats, getExits } from '../api/client'
+import { getStats, getExits, getApiError } from '../api/client'
 import {
   Globe, ListFilter, Rss, Activity, CheckCircle, XCircle,
   AlertCircle, RotateCcw, ArrowRight,
 } from 'lucide-react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 function StatusDot({ status }: { status: string }) {
@@ -20,15 +21,16 @@ function ExitStatusBadge({ status }: { status: string }) {
 }
 
 export default function Dashboard() {
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const { data: stats, isLoading: statsLoading, error: statsError, refetch: refreshStats, isFetching: statsFetching, dataUpdatedAt } = useQuery({
     queryKey: ['stats'],
     queryFn: getStats,
-    refetchInterval: 15_000,
+    refetchInterval: autoRefresh ? 15_000 : false,
   })
-  const { data: exits, isLoading: exitsLoading } = useQuery({
+  const { data: exits, isLoading: exitsLoading, error: exitsError, refetch: refreshExits, isFetching: exitsFetching } = useQuery({
     queryKey: ['exits'],
     queryFn: getExits,
-    refetchInterval: 15_000,
+    refetchInterval: autoRefresh ? 15_000 : false,
   })
 
   const statCards = [
@@ -78,6 +80,43 @@ export default function Dashboard() {
         <p className="page-subtitle">SNI traffic routing overview</p>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3 text-sm text-gray-400">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
+          Auto-refresh every 15 seconds
+        </label>
+        <button className="btn-secondary" disabled={statsFetching || exitsFetching}
+          onClick={() => { void refreshStats(); void refreshExits() }}>
+          <RotateCcw size={14} className={statsFetching || exitsFetching ? 'animate-spin' : ''} /> Refresh now
+        </button>
+        {dataUpdatedAt > 0 && <span className="text-xs">Last received: {new Date(dataUpdatedAt).toLocaleTimeString()}</span>}
+      </div>
+      {(statsError || exitsError) && (
+        <div role="alert" className="card border-red-800 text-red-300 text-sm">
+          Could not refresh gateway status: {getApiError(statsError || exitsError)}. Check your connection and try Refresh now.
+          {(stats || exits) && <p className="mt-1">Previously received data is shown below.</p>}
+        </div>
+      )}
+      {stats && !statsError && !exitsError && (!stats.exit_count || !stats.rule_count || !stats.last_publish?.id) && (
+        <section className="card space-y-4" aria-labelledby="setup-title">
+          <h2 id="setup-title" className="font-semibold text-white">Get your gateway ready</h2>
+          <p className="text-sm text-gray-400">Follow these steps to route your first domain through a VPN.</p>
+          <ol className="grid gap-3 sm:grid-cols-3">
+            {[
+              { title: '1. Connect a VPN exit', detail: 'Add your VPN credentials, start the exit, and check its public IP.', to: '/exits', done: stats.running_exit_count > 0 },
+              { title: '2. Choose your domains', detail: 'Add routing rules or subscribe to an automatically updated domain list.', to: '/rules', done: stats.rule_count > 0 },
+              { title: '3. Publish your routes', detail: 'Preview and apply your configuration, then point domain DNS to this gateway.', to: '/publish', done: stats.last_publish?.status === 'success' },
+            ].map(step => (
+              <li key={step.to} className="rounded-xl border border-gray-700 p-4">
+                <Link to={step.to} className="text-indigo-300 font-medium text-sm">{step.title} {step.done && '✓'}</Link>
+                <p className="mt-2 text-xs text-gray-400">{step.detail}</p>
+              </li>
+            ))}
+          </ol>
+          <Link to="/subscriptions" className="text-sm text-indigo-300">Set up automatic domain-list updates →</Link>
+        </section>
+      )}
+
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {statCards.map(({ label, value, icon: Icon, color, bg, border, to }) => (
@@ -111,6 +150,8 @@ export default function Dashboard() {
         </div>
         {exitsLoading ? (
           <div className="px-5 py-8 text-center text-gray-600 text-sm">Loading...</div>
+        ) : exitsError && !exits ? (
+          <p className="p-5 text-sm text-gray-400">Exit status is unavailable. Use Refresh now to retry.</p>
         ) : !exits || exits.length === 0 ? (
           <div className="px-5 py-10 text-center">
             <Globe size={28} className="mx-auto text-gray-700 mb-2" />
@@ -178,7 +219,7 @@ export default function Dashboard() {
             </span>
           </div>
         </div>
-      ) : !statsLoading && (
+      ) : !statsLoading && !statsError && (
         <div className="card border-dashed text-center py-6">
           <AlertCircle size={20} className="mx-auto text-gray-700 mb-2" />
           <p className="text-gray-500 text-sm">No publish history</p>
