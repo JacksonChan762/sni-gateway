@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/models"
@@ -38,12 +40,12 @@ func (h *ExitHandler) List(c *fiber.Ctx) error {
 }
 
 type CreateExitRequest struct {
-	Name               string `json:"name"`
-	Runtime            string `json:"runtime"`
-	Protocol           string `json:"protocol"`
-	Provider           string `json:"provider"`
-	Country            string `json:"country"`
-	City               string `json:"city"`
+	Name                  string `json:"name"`
+	Runtime               string `json:"runtime"`
+	Protocol              string `json:"protocol"`
+	Provider              string `json:"provider"`
+	Country               string `json:"country"`
+	City                  string `json:"city"`
 	WireguardPrivKey      string `json:"wireguard_private_key"`
 	WireguardPublicKey    string `json:"wireguard_public_key"`
 	WireguardEndpointIP   string `json:"wireguard_endpoint_ip"`
@@ -367,18 +369,18 @@ func validateExitConfig(exit *models.Exit) error {
 	}
 	env := extractStoredComposeEnv(raw)
 	req := CreateExitRequest{
-		Protocol:               exit.Protocol,
-		Provider:               exit.Provider,
-		WireguardPrivKey:       firstConfigValue(env, raw, "WIREGUARD_PRIVATE_KEY", "wireguard_private_key"),
-		WireguardPublicKey:     firstConfigValue(env, raw, "WIREGUARD_PUBLIC_KEY", "wireguard_public_key"),
-		WireguardEndpointIP:    firstConfigValue(env, raw, "WIREGUARD_ENDPOINT_IP", "wireguard_endpoint_ip"),
-		WireguardEndpointPort:  firstConfigValue(env, raw, "WIREGUARD_ENDPOINT_PORT", "wireguard_endpoint_port"),
-		WireguardPresharedKey:  firstConfigValue(env, raw, "WIREGUARD_PRESHARED_KEY", "wireguard_preshared_key"),
-		WireguardAllowedIPs:    firstConfigValue(env, raw, "WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"),
-		WireguardAddresses:     firstConfigValue(env, raw, "WIREGUARD_ADDRESSES", "wireguard_addresses"),
-		WireguardDNS:           firstConfigValue(env, raw, "WIREGUARD_DNS", "wireguard_dns"),
-		OpenVPNUser:            firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
-		OpenVPNPassword:        firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
+		Protocol:              exit.Protocol,
+		Provider:              exit.Provider,
+		WireguardPrivKey:      firstConfigValue(env, raw, "WIREGUARD_PRIVATE_KEY", "wireguard_private_key"),
+		WireguardPublicKey:    firstConfigValue(env, raw, "WIREGUARD_PUBLIC_KEY", "wireguard_public_key"),
+		WireguardEndpointIP:   firstConfigValue(env, raw, "WIREGUARD_ENDPOINT_IP", "wireguard_endpoint_ip"),
+		WireguardEndpointPort: firstConfigValue(env, raw, "WIREGUARD_ENDPOINT_PORT", "wireguard_endpoint_port"),
+		WireguardPresharedKey: firstConfigValue(env, raw, "WIREGUARD_PRESHARED_KEY", "wireguard_preshared_key"),
+		WireguardAllowedIPs:   firstConfigValue(env, raw, "WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"),
+		WireguardAddresses:    firstConfigValue(env, raw, "WIREGUARD_ADDRESSES", "wireguard_addresses"),
+		WireguardDNS:          firstConfigValue(env, raw, "WIREGUARD_DNS", "wireguard_dns"),
+		OpenVPNUser:           firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
+		OpenVPNPassword:       firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
 	}
 	return validateExitRequest(req)
 }
@@ -814,6 +816,9 @@ func (h *ExitHandler) Start(c *fiber.Ctx) error {
 	if exit == nil {
 		return c.Status(404).JSON(fiber.Map{"error": "not found"})
 	}
+	if !exit.Enabled {
+		return c.Status(400).JSON(fiber.Map{"error": "enable this exit before starting it"})
+	}
 	if err := h.manager.Start(exit); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -835,6 +840,9 @@ func (h *ExitHandler) Restart(c *fiber.Ctx) error {
 	exit := h.getExit(c)
 	if exit == nil {
 		return c.Status(404).JSON(fiber.Map{"error": "not found"})
+	}
+	if !exit.Enabled {
+		return c.Status(400).JSON(fiber.Map{"error": "enable this exit before starting it"})
 	}
 	if err := h.manager.Restart(exit); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -882,12 +890,6 @@ func (h *ExitHandler) Status(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
-	// Update DB
-	exit.Status = status
-	if ip != "" {
-		exit.PublicIP = ip
-	}
-	db.DB.Save(exit)
 	return c.JSON(fiber.Map{
 		"status":    status,
 		"public_ip": ip,
@@ -901,4 +903,20 @@ func (h *ExitHandler) getExit(c *fiber.Ctx) *models.Exit {
 		return nil
 	}
 	return &exit
+}
+
+func (h *ExitHandler) StopAll(c *fiber.Ctx) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	results, err := h.manager.StopAll(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	failed := 0
+	for _, result := range results {
+		if result.Error != "" {
+			failed++
+		}
+	}
+	return c.JSON(fiber.Map{"results": results, "failed_count": failed})
 }

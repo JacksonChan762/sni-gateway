@@ -25,6 +25,7 @@ services:
     restart: unless-stopped
 
   backend:
+    stop_grace_period: 30s
     build:
       context: .
       dockerfile: backend/Dockerfile

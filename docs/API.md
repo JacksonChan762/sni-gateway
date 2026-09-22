@@ -785,3 +785,9 @@ openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 - Matched port `80` traffic redirects to HTTPS. Matched port `443` traffic is forwarded by SNI through the selected relay/VPN exit.
 - The subscription list file is fetched with a 10 MB limit.
 - Subscription rules have priority `50`; manual rules default to `100`.
+
+## Routing preview and stopping exits
+
+`POST /api/rules/test` accepts `{"host":"api.example.com:443"}` and returns `matched`, normalized `host`, and (when matched) `rule` (`id`, `pattern`, `type`, `priority`) and `exit` (`id`, `name`, `status`). It previews saved rules, including unpublished changes. Invalid hosts return 400. Higher priority wins across exact/suffix rules; lowest rule ID breaks ties.
+
+`POST /api/exits/stop-all` stops VPN and relay containers for all database exits with up to four concurrent workers. Returns `{"results":[{"id":1,"name":"us"}],"failed_count":0}`. A failed result includes `error`; individual failures are reported in a 200 response, while setup/database errors return 500. Settings, enabled flags, rules, and subscriptions are retained. Stops are idempotent for missing containers. Scheduled restarts only include enabled exits with recorded status `running`.

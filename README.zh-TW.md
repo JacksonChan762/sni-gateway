@@ -1,5 +1,7 @@
 # SNI Gateway
 
+[v1.1 Beta 更新說明（繁體中文／English）](docs/releases/v1.1-beta.md)
+
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
 SNI Gateway 是一個透過網頁介面管理的 TLS SNI 流量路由閘道器。它在邊緣節點接收 HTTP/HTTPS 流量，根據資料庫中的規則比對網域，並將符合條件的 HTTPS 連線透過指定的 VPN 出口轉發。
@@ -147,12 +149,20 @@ example.com
 # 點前綴 → 後綴比對規則（比對 example.com 及所有子網域）
 +.example.com
 
-# Clash/Surge/Meta 格式的前綴，解析前會自動去除
+# Clash/Surge/Meta 格式，保留精確／後綴比對類型
 DOMAIN,example.com
 DOMAIN-SUFFIX,example.com
 ```
 
 訂閱規則的優先級為 `50`，手動規則預設優先級為 `100`，手動規則優先被評估。
+
+### 訂閱同步行為
+
+- `DOMAIN-SUFFIX,example.com` 保留後綴匹配，可接受第三欄策略名稱。
+- 網域統一轉為小寫並移除重複規則；使用 ASCII 或 punycode 網域。不支援的規則類型與無效網域會略過。
+- 下載逾時為 30 秒，超過 10 MiB 的檔案會被拒絕，不會套用截斷內容。
+- 規則採分批寫入，並在同一資料庫交易中替換；資料庫寫入失敗會保留原有規則。交易提交後若 nginx 發布失敗，會另外回報錯誤。
+- 同步失敗後仍保留排程，於下次排程重試。
 
 ## API 認證
 
@@ -326,3 +336,12 @@ npm run build
 bash scripts/update.sh --check
 bash scripts/update.sh --apply
 ```
+
+## 匹配效能與關閉操作
+
+- 使用 nginx 原生 hostname map，在發布前解決精確／後綴規則的優先級衝突，移除逐條正則匹配與重複鍵。優先級較高者勝出；相同優先級採用較小的規則 ID。網域不分大小寫，HTTP Host 的 port 不影響匹配。
+- Publish → Test domain routing 可預覽已儲存規則的匹配結果，包含尚未發布的變更；此功能不是實際連線測試。
+- Exits → Stop All 同時停止各出口的 VPN 與 relay，逐項顯示失敗原因，保留規則與訂閱。可在介面重新啟動已啟用的出口。停止的出口不會被定時重啟重新開啟，其路由亦不會自動轉往另一出口。
+- 完整停止服務與動態建立的出口：`bash scripts/stop.sh`。此指令先停止後端，再停止資料庫記錄的 VPN／relay，最後停止 Compose 服務，保留設定與資料卷。
+- 恢復管理介面：`docker compose up -d`，再手動啟動需要的出口。單獨重啟後端會保留 VPN 運行；直接使用 `docker compose stop` 不會處理動態出口。
+- 驗證：後端 `go test -race ./...`；前端 `npm ci && npm run build`；腳本 `python3 -m unittest discover -s scripts/tests`。nginx 整合測試需要 nginx 與 `/usr/lib/nginx/modules/ngx_stream_module.so`，缺少時會標示略過。

@@ -3,6 +3,7 @@ package api
 import (
 	"sni-gateway/internal/config"
 	"sni-gateway/internal/services"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -69,6 +70,7 @@ func (s *Server) registerRoutes() {
 	// Rules
 	api.Get("/rules", s.rules.List)
 	api.Post("/rules", s.rules.Create)
+	api.Post("/rules/test", s.rules.Test)
 	api.Post("/rules/bulk", s.rules.CreateBulk)
 	api.Put("/rules/:id", s.rules.Update)
 	api.Delete("/rules/:id", s.rules.Delete)
@@ -83,6 +85,7 @@ func (s *Server) registerRoutes() {
 	// Exits
 	api.Get("/exits", s.exits.List)
 	api.Post("/exits", s.exits.Create)
+	api.Post("/exits/stop-all", s.exits.StopAll)
 	api.Put("/exits/:id", s.exits.Update)
 	api.Delete("/exits/:id", s.exits.Delete)
 	api.Post("/exits/:id/start", s.exits.Start)
@@ -114,3 +117,5 @@ func (s *Server) dashboardStats(c *fiber.Ctx) error {
 func (s *Server) Listen(addr string) error {
 	return s.app.Listen(addr)
 }
+
+func (s *Server) Shutdown() error { return s.app.ShutdownWithTimeout(15 * time.Second) }

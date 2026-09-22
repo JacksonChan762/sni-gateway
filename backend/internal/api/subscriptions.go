@@ -24,14 +24,23 @@ func (h *SubscriptionHandler) List(c *fiber.Ctx) error {
 	if err := db.DB.Preload("Exit").Find(&subs).Error; err != nil {
 		return err
 	}
-	// Attach rule counts
-	for i := range subs {
-		var count int64
-		db.DB.Model(&models.Rule{}).
-			Where("source = 'subscription' AND sub_id = ?", subs[i].ID).
-			Count(&count)
-		subs[i].RuleCount = int(count)
+	// Count all subscriptions in one query instead of one query per row.
+	var counts []struct {
+		SubID uint
+		Count int64
 	}
+	if err := db.DB.Model(&models.Rule{}).Select("sub_id, COUNT(*) AS count").
+		Where("source = ? AND sub_id IS NOT NULL", "subscription").Group("sub_id").Scan(&counts).Error; err != nil {
+		return err
+	}
+	byID := make(map[uint]int, len(counts))
+	for _, row := range counts {
+		byID[row.SubID] = int(row.Count)
+	}
+	for i := range subs {
+		subs[i].RuleCount = byID[subs[i].ID]
+	}
+
 	return c.JSON(subs)
 }
 
@@ -62,6 +71,9 @@ func (h *SubscriptionHandler) Create(c *fiber.Ctx) error {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	if req.IntervalMinutes < 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "interval_minutes must be positive"})
+	}
 	interval := req.IntervalMinutes
 	if interval == 0 {
 		interval = 360
@@ -77,13 +89,14 @@ func (h *SubscriptionHandler) Create(c *fiber.Ctx) error {
 	if err := db.DB.Create(&sub).Error; err != nil {
 		return err
 	}
-	db.DB.Preload("Exit").First(&sub, sub.ID)
-
 	if sub.Enabled {
+		h.manager.Schedule(sub)
 		if err := h.manager.SyncSubscription(sub.ID); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
-		h.manager.Schedule(sub)
+	}
+	if err := db.DB.Preload("Exit").First(&sub, sub.ID).Error; err != nil {
+		return err
 	}
 	return c.Status(201).JSON(sub)
 }
@@ -101,6 +114,9 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
+	if req.IntervalMinutes < 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "interval_minutes must be positive"})
+	}
 	if req.Name != "" {
 		sub.Name = req.Name
 	}
@@ -134,10 +150,10 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 	}
 
 	if sub.Enabled {
+		h.manager.Schedule(sub)
 		if err := h.manager.SyncSubscription(sub.ID); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
-		h.manager.Schedule(sub)
 	} else {
 		h.manager.Unschedule(sub.ID)
 		if err := db.DB.Where("source = 'subscription' AND sub_id = ?", sub.ID).Delete(&models.Rule{}).Error; err != nil {
@@ -150,7 +166,9 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 		}
 	}
 
-	db.DB.Preload("Exit").First(&sub, sub.ID)
+	if err := db.DB.Preload("Exit").First(&sub, sub.ID).Error; err != nil {
+		return err
+	}
 	return c.JSON(sub)
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useState, type ChangeEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getExits, createExit, updateExit, deleteExit,
-  startExit, stopExit, restartExit, getExitLogs, getExitConfig, getApiError,
+  startExit, stopExit, stopAllExits, restartExit, getExitLogs, getExitConfig, getApiError,
 } from '../api/client'
 import { type Exit } from '../api/client'
 import {
@@ -273,7 +273,7 @@ export default function Exits() {
   const [editExit, setEditExit] = useState<Exit | null>(null)
 
   const invalidate = async () => {
-    await qc.invalidateQueries({ queryKey: ['exits'] })
+    await Promise.all([qc.invalidateQueries({ queryKey: ['exits'] }), qc.invalidateQueries({ queryKey: ['stats'] })])
   }
 
   const createMut = useMutation({
@@ -308,7 +308,8 @@ export default function Exits() {
   })
   const stopMut = useMutation({
     mutationFn: stopExit,
-    onSuccess: async () => { await invalidate(); toast.success('Exit stopped') },
+    onSuccess: () => toast.success('Exit and relay stopped'),
+    onSettled: invalidate,
     onError: err => toast.error(getApiError(err)),
   })
   const restartMut = useMutation({
@@ -316,6 +317,28 @@ export default function Exits() {
     onSuccess: async () => { await invalidate(); toast.success('Exit restarted') },
     onError: err => toast.error(getApiError(err)),
   })
+
+  const [stopFailures, setStopFailures] = useState<string[]>([])
+  const stopAllMut = useMutation({
+    mutationFn: stopAllExits,
+    onSuccess: result => {
+      setStopFailures(result.results.filter(r => r.error).map(r => `${r.name}: ${r.error}`))
+      if (result.failed_count) toast.error(`${result.failed_count} exits could not be fully stopped`)
+      else toast.success('All VPN exits and relays stopped')
+    },
+    onError: err => toast.error(getApiError(err)),
+    onSettled: invalidate,
+  })
+  const runtimeBusy = startMut.isPending || stopMut.isPending || restartMut.isPending || stopAllMut.isPending || updateMut.isPending || createMut.isPending || deleteMut.isPending
+  const handleStopAll = async () => {
+    const ok = await confirm({
+      title: 'Stop All Exits',
+      message: 'Stop all VPN exits and their relays? Routed connections will disconnect. Rules and subscriptions are kept; start exits again to resume.',
+      confirmText: 'Stop All',
+      dangerous: true,
+    })
+    if (ok) { setStopFailures([]); stopAllMut.mutate() }
+  }
 
   const handleLogs = async (exit: Exit) => {
     try {
@@ -369,11 +392,20 @@ export default function Exits() {
           <h1 className="page-title">Exits</h1>
           <p className="page-subtitle">Manage Gluetun VPN exit containers</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowForm(true)}>
-          <Plus size={15} /> New Exit
-        </button>
+        <div className="flex gap-2">
+          <button className="btn-secondary" disabled={runtimeBusy || exits.length === 0} onClick={handleStopAll}>
+            <Square size={15} /> {stopAllMut.isPending ? 'Stopping…' : 'Stop All'}
+          </button>
+          <button className="btn-primary" disabled={runtimeBusy} onClick={() => setShowForm(true)}>
+            <Plus size={15} /> New Exit
+          </button>
+        </div>
       </div>
 
+      {stopFailures.length > 0 && <div className="card border-red-800" role="alert">
+        <p className="text-red-300 mb-2">Some components could not be stopped. Retry Stop All after checking these errors:</p>
+        {stopFailures.map(message => <p key={message} className="text-sm text-red-400">{message}</p>)}
+      </div>}
       {isLoading ? (
         <div className="card flex items-center justify-center py-16">
           <div className="text-gray-500 text-sm flex items-center gap-2">
@@ -405,6 +437,7 @@ export default function Exits() {
               exit={exit}
               onStart={() => startMut.mutate(exit.id)}
               onStop={() => stopMut.mutate(exit.id)}
+              busy={runtimeBusy}
               onRestart={() => restartMut.mutate(exit.id)}
               onEdit={() => setEditExit(exit)}
               onCopy={() => copyMut.mutate(exit)}
@@ -454,10 +487,11 @@ export default function Exits() {
 // ─── Exit Card ────────────────────────────────────────────────────────────────
 
 function ExitCard({
-  exit, onStart, onStop, onRestart, onEdit, onCopy, onDelete, onLogs,
+  exit, onStart, onStop, onRestart, onEdit, onCopy, onDelete, onLogs, busy,
 }: {
   exit: Exit
   onStart: () => void
+  busy: boolean
   onStop: () => void
   onRestart: () => void
   onEdit: () => void
@@ -498,19 +532,20 @@ function ExitCard({
         </div>
 
         <div className="flex items-center gap-1 flex-wrap justify-end flex-shrink-0">
-          {exit.status !== 'running' ? (
-            <button className="btn-success text-xs" onClick={onStart}>
+          {exit.status !== 'running' && (
+            <button disabled={busy || !exit.enabled} className="btn-success text-xs" onClick={onStart}>
               <Play size={12} /> Start
             </button>
-          ) : (
-            <button className="btn-secondary text-xs" onClick={onStop}>
+          )}
+          {exit.status !== 'stopped' && exit.status !== 'not_found' && (
+            <button disabled={busy} className="btn-secondary text-xs" onClick={onStop}>
               <Square size={12} /> Stop
             </button>
           )}
-          <button className="btn-secondary text-xs" onClick={onRestart}>
+          <button disabled={busy || !exit.enabled} className="btn-secondary text-xs" onClick={onRestart}>
             <RotateCcw size={12} /> Restart
           </button>
-          <button className="btn-ghost text-xs" onClick={onEdit}>
+          <button className="btn-ghost text-xs" disabled={busy} onClick={onEdit}>
             <Pencil size={12} /> Edit
           </button>
           <button className="btn-ghost text-xs" onClick={onCopy}>
@@ -521,7 +556,7 @@ function ExitCard({
           </button>
           <button
             className="btn-ghost text-xs text-red-500 hover:text-red-400 hover:bg-red-950/30"
-            onClick={onDelete}
+            disabled={busy} onClick={onDelete}
           >
             <Trash2 size={12} />
           </button>

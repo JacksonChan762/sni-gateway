@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   previewConfig, validateConfig, applyConfig, rollbackConfig,
-  getPublishHistory, getApiError,
+  getPublishHistory, getApiError, testRoute, type RouteMatch,
 } from '../api/client'
 import { type PublishHistory } from '../api/client'
 import {
@@ -20,6 +20,10 @@ export default function Publish() {
     queryKey: ['publish-history'],
     queryFn: getPublishHistory,
   })
+  const [host, setHost] = useState('')
+  const [match, setMatch] = useState<RouteMatch | null>(null)
+  const [matchLoading, setMatchLoading] = useState(false)
+  const [matchError, setMatchError] = useState('')
   const [preview, setPreview] = useState<string | null>(null)
   const [validationResult, setValidationResult] = useState<{ valid: boolean; error?: string } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -176,6 +180,25 @@ export default function Publish() {
           </button>
         ))}
       </div>
+
+      <form className="card space-y-3" onSubmit={async e => {
+        e.preventDefault()
+        setMatchLoading(true); setMatch(null); setMatchError('')
+        try { setMatch(await testRoute(host)) }
+        catch (error) { setMatchError(getApiError(error)) }
+        finally { setMatchLoading(false) }
+      }}>
+        <label htmlFor="route-host" className="block font-medium text-sm">Test domain routing</label>
+        <p className="text-xs text-gray-400">Preview saved rules, including unpublished changes. Higher priority wins; equal priorities use the lowest rule ID.</p>
+        <div className="flex gap-2">
+          <input id="route-host" className="input flex-1" placeholder="example.com" value={host} disabled={matchLoading} onChange={e => { setHost(e.target.value); setMatch(null); setMatchError('') }} required />
+          <button className="btn-primary" disabled={matchLoading}>{matchLoading ? 'Checking…' : 'Test Match'}</button>
+        </div>
+        {matchError && <p role="alert" className="text-sm text-red-400">{matchError}</p>}
+        {match && <p role="status" className="text-sm text-gray-300">
+          {match.matched ? `${match.host} → ${match.exit?.name} (${match.exit?.status}); ${match.rule?.type} ${match.rule?.pattern}, priority ${match.rule?.priority}` : `${match.host}: no matching route`}
+        </p>}
+      </form>
 
       {/* Workflow hint */}
       <div className="flex items-center gap-2 text-xs text-gray-600">

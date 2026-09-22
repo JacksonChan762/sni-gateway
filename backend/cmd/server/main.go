@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"os/signal"
 	"sni-gateway/internal/api"
 	"sni-gateway/internal/config"
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/docker"
 	"sni-gateway/internal/services"
+	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -65,9 +68,24 @@ func main() {
 	addr := ":" + cfg.Port
 	log.Printf("SNI Gateway backend starting on %s", addr)
 
-	if err := server.Listen(addr); err != nil {
-		log.Fatal(err)
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	listenErr := make(chan error, 1)
+	go func() { listenErr <- server.Listen(addr) }()
+	select {
+	case err := <-listenErr:
+		if err != nil {
+			log.Fatalf("Server stopped: %v", err)
+		}
+	case <-ctx.Done():
+		log.Println("Shutting down API and background schedulers")
+		subMgr.Stop()
+		restartScheduler.Stop()
+		if err := server.Shutdown(); err != nil {
+			log.Printf("HTTP shutdown: %v", err)
+		}
 	}
-
-	_ = os.Getenv // suppress unused import
+	if sqlDB, err := db.DB.DB(); err == nil {
+		_ = sqlDB.Close()
+	}
 }
