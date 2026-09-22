@@ -1,5 +1,7 @@
 # SNI Gateway
 
+[v1.1 Beta 更新說明（繁體中文／English）](docs/releases/v1.1-beta.md)
+
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
 SNI Gateway 是一個透過網頁介面管理的 TLS SNI 流量路由閘道器。它在邊緣節點接收 HTTP/HTTPS 流量，根據資料庫中的規則比對網域，並將符合條件的 HTTPS 連線透過指定的 VPN 出口轉發。
