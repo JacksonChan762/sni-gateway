@@ -165,3 +165,16 @@ export function getApiError(error: unknown): string {
   if (error instanceof Error) return error.message
   return 'Unknown error'
 }
+
+export interface ExitStopSummary {
+ results: { id: number; name: string; error?: string }[]
+ failed_count: number
+}
+export const stopAllExits = () => api.post<ExitStopSummary>('/exits/stop-all').then(r => r.data)
+export interface RouteMatch {
+ matched: boolean
+ host: string
+ rule?: { id: number; pattern: string; type: string; priority: number }
+ exit?: { id: number; name: string; status: string }
+}
+export const testRoute = (host: string) => api.post<RouteMatch>('/rules/test', { host }).then(r => r.data)

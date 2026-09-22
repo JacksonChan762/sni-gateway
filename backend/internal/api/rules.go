@@ -3,6 +3,7 @@ package api
 import (
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/models"
+	"sni-gateway/internal/services"
 	"strconv"
 	"strings"
 
@@ -146,6 +147,9 @@ func (h *RuleHandler) Update(c *fiber.Ctx) error {
 		if err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
+		if !services.ValidDomain(rule.Pattern) {
+			return c.Status(400).JSON(fiber.Map{"error": "pattern must be a valid ASCII or punycode domain"})
+		}
 		rule.Type = ruleType
 	}
 	if _, ok := fields["exit_id"]; ok {
@@ -191,8 +195,8 @@ func (h *RuleHandler) Delete(c *fiber.Ctx) error {
 
 func buildManualRule(req CreateRuleRequest) (models.Rule, error) {
 	pattern := normalizeRulePattern(req.Pattern)
-	if pattern == "" {
-		return models.Rule{}, fiber.NewError(fiber.StatusBadRequest, "pattern is required")
+	if !services.ValidDomain(pattern) {
+		return models.Rule{}, fiber.NewError(fiber.StatusBadRequest, "pattern must be a valid ASCII or punycode domain")
 	}
 
 	ruleType := strings.TrimSpace(req.Type)
@@ -223,7 +227,7 @@ func buildManualRule(req CreateRuleRequest) (models.Rule, error) {
 func normalizeRulePattern(pattern string) string {
 	pattern = strings.TrimSpace(pattern)
 	pattern = strings.TrimPrefix(pattern, "+.")
-	return strings.TrimSpace(pattern)
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
 }
 
 func resolveManualRuleType(pattern string, ruleType string) (string, error) {

@@ -118,10 +118,10 @@ Environment variables passed to the backend:
 | `DATABASE_URL` | compose-managed | PostgreSQL connection string. |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket used to create exit containers. |
 | `NGINX_CONFIG_DIR` | `/etc/nginx/conf.d` | Shared volume where generated nginx config is written. |
-| `EXIT_RESTART_CRON` | `@every 12h` | Schedule for restarting all enabled exits; set to `disabled` to turn it off. |
+| `EXIT_RESTART_CRON` | `@every 12h` | Schedule for restarting enabled, running exits; set to `disabled` to turn it off. |
 
 The backend needs Docker socket access because it creates and removes `gluetun-*` and `relay-*` containers when exits are started or deleted.
-All enabled exits are restarted every 12 hours by default.
+Enabled exits whose recorded status is running are restarted every 12 hours by default. Manually stopped exits stay stopped.
 
 ## Automatic Updates
 
@@ -160,12 +160,14 @@ example.com
 # dot prefix → suffix match rule (matches example.com and all subdomains)
 +.example.com
 
-# Clash/Surge/Meta style prefixes are stripped before parsing
+# Clash/Surge/Meta style rules preserve exact/suffix matching
 DOMAIN,example.com
 DOMAIN-SUFFIX,example.com
 ```
 
 Subscription rules get priority `50`. Manual rules default to priority `100` and are evaluated first.
+
+Domain names are normalized to lowercase and duplicate rules are removed. Optional policy columns (for example, `DOMAIN-SUFFIX,example.com,Proxy`) are accepted; unsupported rule types and invalid hostnames are skipped. Use ASCII or punycode domain names. Downloads time out after 30 seconds and files larger than 10 MiB are rejected. Rules are replaced in a single database transaction with batched inserts, preserving the old rules if a database write fails. An nginx publish failure is reported separately after the database transaction commits.
 
 ## API Authentication
 
@@ -297,7 +299,7 @@ openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 
 - Run Publish → Apply after manual routing changes. Subscription syncs automatically publish the generated config, including pending manual changes.
 - Running exits are reconciled automatically after name or runtime config changes; stopped exits are recreated on next start.
-- Enabled exits restart automatically every 12 hours by default.
+- Enabled, running exits restart automatically every 12 hours by default; stopped exits stay stopped.
 - Deleting an exit is blocked when active rules or active subscriptions still reference it. Disable or delete those dependencies first.
 - Disabling or deleting a subscription removes its generated rules and automatically reloads the generated nginx config.
 - The relay image (`sni-gateway-relay:latest`) is built by compose. Exit creation expects this image to exist, so always run `docker compose up --build` for the first start.
@@ -327,3 +329,18 @@ The frontend build writes static files into `backend/public/`, which the backend
 ## Documentation
 
 - API reference: [docs/API.md](docs/API.md)
+
+## Routing and shutdown controls
+
+- Routing uses native nginx hostname maps. Priority is resolved before publishing, including conflicts between exact and suffix rules. Higher priority wins; ties use the lowest rule ID. Domains are case-insensitive. HTTP matching ignores the Host port.
+- Duplicate map keys and suffix regex scans are eliminated. Publish → Test domain routing previews saved rules, including unpublished changes; it is not a live connectivity test.
+- Exits → Stop All stops each VPN and its relay, reports individual failures, and keeps rules/subscriptions. Start enabled exits again to resume. A stopped route remains unavailable until restarted; it does not silently fall back to another exit.
+- To stop the complete stack **including dynamically created exits**, retaining settings and volumes:
+
+  ```bash
+  bash scripts/stop.sh
+  ```
+
+  The script stops the backend first, stops database-listed VPN/relay containers, then stops the Compose services. Run `docker compose up -d` to bring back the admin stack, then start the desired exits in the UI. Plain `docker compose stop` does not manage dynamically created containers. Backend-only restarts leave VPN containers running.
+
+Validation: `go test -race ./...` from `backend`; `npm ci && npm run build` from `frontend`; `python3 -m unittest discover -s scripts/tests`. The nginx integration test additionally needs the nginx executable and `/usr/lib/nginx/modules/ngx_stream_module.so`; otherwise it reports a skip. Matching benchmarks: `go test ./internal/services -run '^$' -bench BenchmarkRoutingMatch -benchmem`.
