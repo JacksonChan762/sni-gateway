@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,13 +13,19 @@ import (
 
 // DialSOCKS connects by hostname so DNS resolution happens inside the VPN exit.
 func DialSOCKS(proxyAddress, host string, port uint16) (net.Conn, error) {
+	return DialSOCKSContext(context.Background(), proxyAddress, host, port)
+}
+
+func DialSOCKSContext(ctx context.Context, proxyAddress, host string, port uint16) (net.Conn, error) {
 	if !validDNSName(host) {
 		return nil, errors.New("invalid destination hostname")
 	}
-	conn, err := net.DialTimeout("tcp", proxyAddress, 5*time.Second)
+	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", proxyAddress)
 	if err != nil {
 		return nil, err
 	}
+	stopCancel := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopCancel()
 	connected := false
 	defer func() {
 		if !connected {
@@ -71,6 +78,9 @@ func DialSOCKS(proxyAddress, host string, port uint16) (net.Conn, error) {
 		return nil, err
 	}
 	if err = conn.SetDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
 	connected = true

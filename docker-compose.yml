@@ -34,6 +34,7 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       EXIT_RESTART_CRON: "${EXIT_RESTART_CRON:-@every 12h}"
+      TLS_IDLE_TIMEOUT: "${TLS_IDLE_TIMEOUT:-5m}"
       PROVIDER_CATALOG_PATH: /var/lib/sni-gateway/providers.json.gz
       PROVIDER_CATALOG_UPDATE_INTERVAL: "${PROVIDER_CATALOG_UPDATE_INTERVAL:-24h}"
     volumes:

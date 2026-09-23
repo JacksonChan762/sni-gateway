@@ -68,7 +68,7 @@ func probeProviderPublicIPFor(ctx context.Context, name string, timeout time.Dur
 	defer deadline.Stop()
 	var lastErr error
 	for {
-		ip, err := probeSingBoxPublicIP(name)
+		ip, err := probeSingBoxPublicIPContext(ctx, name)
 		if err == nil {
 			return ip, nil
 		}

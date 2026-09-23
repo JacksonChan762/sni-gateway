@@ -40,8 +40,8 @@ func NewServer(cfg *config.Config, exitMgr *services.ExitManager, subMgr *servic
 
 	s := &Server{
 		app:     app,
-		exits:   NewExitHandler(exitMgr),
-		rules:   NewRuleHandler(),
+		exits:   NewExitHandler(exitMgr, cfgGen),
+		rules:   NewRuleHandler(cfgGen),
 		subs:    NewSubscriptionHandler(subMgr, cfgGen),
 		publish: NewPublishHandler(cfgGen),
 		login:   NewLoginHandler(cfg.JWTSecret, cfg.AdminUsername, cfg.AdminPassword),

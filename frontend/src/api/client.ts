@@ -156,6 +156,10 @@ export const getExitStatus = (id: number) =>
 // ─── Rules ───────────────────────────────────────────────────────────────────
 
 export const getRules = () => api.get<Rule[]>('/rules?source=manual').then(r => r.data)
+export const getRulesPage = (page: number, search: string) => {
+  const params = new URLSearchParams({ source: 'manual', page: String(page), limit: '50', q: search })
+  return api.get<{ rules: Rule[]; total: number; page: number; limit: number }>(`/rules?${params}`).then(r => r.data)
+}
 export const createRule = (data: Partial<Rule>) => api.post<Rule>('/rules', data).then(r => r.data)
 export const createRulesBulk = (rules: Partial<Rule>[]) =>
   api.post<{ created_count: number; rules: Rule[] }>('/rules/bulk', { rules }).then(r => r.data)

@@ -156,6 +156,9 @@ func (sm *SubscriptionManager) SyncSubscription(subID uint) error {
 		sm.updateSyncStatus(&sub, "failed", err.Error())
 		return err
 	}
+	if changed && sm.configGen != nil {
+		sm.configGen.InvalidatePending()
+	}
 
 	// Retry a previous publish failure even when the downloaded list is unchanged.
 	needsPublish := changed || strings.HasPrefix(sub.LastError, "publish failed:")

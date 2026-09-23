@@ -29,6 +29,31 @@ func ensureExitExists(tx *gorm.DB, exitID *uint) error {
 	return nil
 }
 
+func ensureRuleExitsExist(tx *gorm.DB, rules []models.Rule) error {
+	unique := make(map[uint]struct{})
+	ids := make([]uint, 0)
+	for _, rule := range rules {
+		if rule.ExitID == nil {
+			continue
+		}
+		if _, ok := unique[*rule.ExitID]; !ok {
+			unique[*rule.ExitID] = struct{}{}
+			ids = append(ids, *rule.ExitID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var found []uint
+	if err := tx.Model(&models.Exit{}).Where("id IN ?", ids).Pluck("id", &found).Error; err != nil {
+		return err
+	}
+	if len(found) != len(ids) {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 func getExitDependencySummary(tx *gorm.DB, exitID uint) (exitDependencySummary, error) {
 	summary := exitDependencySummary{}
 

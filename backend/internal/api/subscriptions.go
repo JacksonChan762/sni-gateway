@@ -89,6 +89,7 @@ func (h *SubscriptionHandler) Create(c *fiber.Ctx) error {
 	if err := db.DB.Create(&sub).Error; err != nil {
 		return err
 	}
+	h.generator.InvalidatePending()
 	if sub.Enabled {
 		h.manager.Schedule(sub)
 		if err := h.manager.SyncSubscription(sub.ID); err != nil {
@@ -148,6 +149,7 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 	if err := db.DB.Save(&sub).Error; err != nil {
 		return err
 	}
+	h.generator.InvalidatePending()
 
 	if sub.Enabled {
 		h.manager.Schedule(sub)
@@ -159,6 +161,7 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 		if err := db.DB.Where("source = 'subscription' AND sub_id = ?", sub.ID).Delete(&models.Rule{}).Error; err != nil {
 			return err
 		}
+		h.generator.InvalidatePending()
 		if h.generator != nil {
 			if _, err := h.generator.Apply(); err != nil {
 				return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -185,6 +188,7 @@ func (h *SubscriptionHandler) Delete(c *fiber.Ctx) error {
 	if err := db.DB.Where("source = 'subscription' AND sub_id = ?", sub.ID).Delete(&models.Rule{}).Error; err != nil {
 		return err
 	}
+	h.generator.InvalidatePending()
 
 	if err := db.DB.Delete(&sub).Error; err != nil {
 		return err

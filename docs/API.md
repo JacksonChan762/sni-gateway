@@ -96,7 +96,7 @@ Add a rule with `POST /api/rules`:
 {"pattern":"example.com","type":"suffix","exit_id":1,"priority":100,"enabled":true}
 ```
 
-`type` is `exact` or `suffix`. Higher priority wins, with lower rule ID breaking ties. Other endpoints are `GET /api/rules`, `PUT /api/rules/:id`, `DELETE /api/rules/:id`, `POST /api/rules/bulk`, and `POST /api/rules/test`. Rules can be saved without becoming active until publication.
+`type` is `exact` or `suffix`. Higher priority wins, with lower rule ID breaking ties. Other endpoints are `GET /api/rules`, `PUT /api/rules/:id`, `DELETE /api/rules/:id`, `POST /api/rules/bulk`, and `POST /api/rules/test`. Rules can be saved without becoming active until publication. `GET /api/rules` keeps its array response when called without pagination parameters. Supply `page` (starting at 1), `limit` (1–200), and optional `q` to get `{ "rules": [...], "total": number, "page": number, "limit": number }`. The search matches rule patterns and exit names.
 
 Subscriptions use `GET/POST /api/subscriptions`, `PUT/DELETE /api/subscriptions/:id`, and `POST /api/subscriptions/:id/sync`. A subscription includes `name`, `url`, `exit_id`, `enabled`, and `interval_minutes`. A successful sync updates generated rules and publishes a new routing snapshot.
 

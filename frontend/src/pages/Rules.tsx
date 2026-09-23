@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getRules, createRule, createRulesBulk, updateRule, deleteRule, getExits, getApiError } from '../api/client'
+import { useEffect, useState } from 'react'
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { getRulesPage, createRule, createRulesBulk, updateRule, deleteRule, getExits, getApiError } from '../api/client'
 import { type Rule } from '../api/client'
 import { Plus, Trash2, Pencil, X, ListFilter, Search } from 'lucide-react'
 import { useToast } from '../components/Toast'
@@ -13,11 +13,27 @@ export default function Rules() {
   const qc = useQueryClient()
   const toast = useToast()
   const { confirm, modal: confirmModal } = useConfirm()
-  const { data: rules = [], isLoading, error, refetch } = useQuery({ queryKey: ['rules'], queryFn: getRules })
+  const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [querySearch, setQuerySearch] = useState('')
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuerySearch(search), 250)
+    return () => window.clearTimeout(timer)
+  }, [search])
+  const { data, isLoading, isFetching, isPlaceholderData, error, refetch } = useQuery({
+    queryKey: ['rules', page, querySearch],
+    queryFn: () => getRulesPage(page, querySearch),
+    placeholderData: keepPreviousData,
+  })
+  const rules = isPlaceholderData ? [] : data?.rules ?? []
+  const total = data?.total ?? 0
+  const pages = Math.max(1, Math.ceil(total / 50))
+  useEffect(() => {
+    if (!isFetching && page > pages) setPage(pages)
+  }, [isFetching, page, pages])
   const { data: exits = [] } = useQuery({ queryKey: ['exits'], queryFn: getExits })
   const [showForm, setShowForm] = useState(false)
   const [editRule, setEditRule] = useState<Rule | null>(null)
-  const [search, setSearch] = useState('')
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['rules'] })
@@ -59,12 +75,6 @@ export default function Rules() {
     if (ok) deleteMut.mutate(rule.id)
   }
 
-  const filtered = rules.filter(r => {
-    const matchSearch = !search || r.pattern.toLowerCase().includes(search.toLowerCase()) ||
-      r.exit?.name?.toLowerCase().includes(search.toLowerCase())
-    return matchSearch
-  })
-
   return (
     <div className="space-y-6">
       {confirmModal}
@@ -73,7 +83,7 @@ export default function Rules() {
         <div>
           <h1 className="page-title">Rules</h1>
           <p className="page-subtitle">
-            {rules.length} manual {rules.length === 1 ? 'rule' : 'rules'}
+            {total} {querySearch ? 'matching' : 'manual'} {total === 1 ? 'rule' : 'rules'}
           </p>
         </div>
         <button className="btn-primary" onClick={() => setShowForm(true)}>
@@ -89,7 +99,7 @@ export default function Rules() {
       </div>}
 
       {/* Filters */}
-      {rules.length > 0 && (
+      {(total > 0 || search !== '') && (
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 min-w-48">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -98,13 +108,13 @@ export default function Rules() {
               placeholder="Search by pattern or exit..."
               aria-label="Search rules by pattern or exit"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setPage(1) }}
             />
           </div>
         </div>
       )}
 
-      {isLoading ? (
+      {isLoading || isPlaceholderData ? (
         <div className="card flex items-center justify-center py-16">
           <div className="text-gray-500 text-sm flex items-center gap-2">
             <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
@@ -114,7 +124,7 @@ export default function Rules() {
             Loading rules...
           </div>
         </div>
-      ) : error && rules.length === 0 ? null : rules.length === 0 ? (
+      ) : error && rules.length === 0 ? null : total === 0 && querySearch === '' ? (
         <div className="card">
           <div className="empty-state">
             <div className="w-14 h-14 rounded-2xl bg-gray-800 flex items-center justify-center mb-4">
@@ -127,7 +137,7 @@ export default function Rules() {
             </button>
           </div>
         </div>
-      ) : filtered.length === 0 ? (
+      ) : rules.length === 0 ? (
         <div className="card text-center py-10">
           <p className="text-gray-500 text-sm">No rules match your search</p>
         </div>
@@ -146,7 +156,7 @@ export default function Rules() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(rule => (
+                {rules.map(rule => (
                   <tr
                     key={rule.id}
                     className="border-b border-gray-800/40 last:border-0 table-row-hover"
@@ -189,11 +199,14 @@ export default function Rules() {
               </tbody>
             </table>
           </div>
-          {filtered.length < rules.length && (
-            <div className="px-4 py-2 text-xs text-gray-600 border-t border-gray-800/50">
-              Showing {filtered.length} of {rules.length} rules
+          <div className="flex items-center justify-between gap-3 px-4 py-2 text-xs text-gray-400 border-t border-gray-800/50">
+            <span>Showing {(page - 1) * 50 + 1}–{Math.min(page * 50, total)} of {total} rules{isFetching ? ' · Updating…' : ''}</span>
+            <div className="flex items-center gap-2">
+              <button className="btn-secondary" disabled={page <= 1 || isFetching} onClick={() => setPage(page - 1)}>Previous</button>
+              <span>Page {page} of {pages}</span>
+              <button className="btn-secondary" disabled={page >= pages || isFetching} onClick={() => setPage(page + 1)}>Next</button>
             </div>
-          )}
+          </div>
         </div>
       )}
 

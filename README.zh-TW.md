@@ -49,4 +49,4 @@ cd frontend && npm run build
 
 選擇依建立 VPN 容器到成功取得公網 IP 的耗時排序；若該端點在正式連線時失敗，會改試其他測試成功的端點。候選超過四個時只抽測四個，結果不代表全目錄的絕對最快。每個端點最多等待 40 秒，整次連線最多約五分鐘。**Check status** 只檢查目前端點；要重新測速並選擇端點，請按 **Restart**。更新程式後，原本運行中的出口也需按 **Restart** 才會採用新規則。
 
-目前僅支援帶有 SNI 的 TCP HTTPS，不轉送 QUIC/HTTP3 或無 SNI 的 TLS。完整整合測試需要 Docker；單元測試與 sing-box 設定檢查不會建立真正的 VPN 通道。
+目前僅支援帶有 SNI 的 TCP HTTPS，不轉送 QUIC/HTTP3 或無 SNI 的 TLS。雙向都沒有流量的 TLS 連線預設五分鐘後關閉；可在 `.env` 設定 `TLS_IDLE_TIMEOUT` 調整。完整整合測試需要 Docker；單元測試與 sing-box 設定檢查不會建立真正的 VPN 通道。

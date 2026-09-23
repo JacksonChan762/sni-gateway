@@ -11,14 +11,14 @@ import (
 	"gorm.io/gorm"
 )
 
-type RuleHandler struct{}
+type RuleHandler struct{ publisher services.Publisher }
 
-func NewRuleHandler() *RuleHandler {
-	return &RuleHandler{}
+func NewRuleHandler(publisher services.Publisher) *RuleHandler {
+	return &RuleHandler{publisher: publisher}
 }
 
 func (h *RuleHandler) List(c *fiber.Ctx) error {
-	var rules []models.Rule
+	rules := []models.Rule{}
 	q := db.DB.Preload("Exit", publicExit)
 	if source := c.Query("source", "manual"); source != "" && source != "all" {
 		q = q.Where("source = ?", source)
@@ -26,11 +26,43 @@ func (h *RuleHandler) List(c *fiber.Ctx) error {
 	if exitID := c.Query("exit_id"); exitID != "" {
 		q = q.Where("exit_id = ?", exitID)
 	}
+	// Keep the original array response for existing API clients. The UI opts
+	// into a bounded result with page, limit, and q.
+	if c.Query("page") != "" || c.Query("limit") != "" || c.Query("q") != "" {
+		page, pageErr := strconv.Atoi(c.Query("page", "1"))
+		limit, limitErr := strconv.Atoi(c.Query("limit", "50"))
+		if pageErr != nil || limitErr != nil || page < 1 || page > 1000000 || limit < 1 || limit > 200 {
+			return c.Status(400).JSON(fiber.Map{"error": "page must be 1–1000000 and limit must be 1–200"})
+		}
+		search := strings.TrimSpace(c.Query("q"))
+		if len(search) > 253 {
+			return c.Status(400).JSON(fiber.Map{"error": "search is too long"})
+		}
+		if search != "" {
+			term := "%" + escapeLike(search) + "%"
+			exitIDs := db.DB.Model(&models.Exit{}).Select("id").Where("name ILIKE ?", term)
+			q = q.Where("pattern ILIKE ? OR exit_id IN (?)", term, exitIDs)
+		}
+		var total int64
+		if err := q.Model(&models.Rule{}).Count(&total).Error; err != nil {
+			return err
+		}
+		if err := q.Order("priority DESC, id ASC").Offset((page - 1) * limit).Limit(limit).Find(&rules).Error; err != nil {
+			return err
+		}
+		return c.JSON(fiber.Map{"rules": rules, "total": total, "page": page, "limit": limit})
+	}
 	q = q.Order("priority DESC, id ASC")
 	if err := q.Find(&rules).Error; err != nil {
 		return err
 	}
 	return c.JSON(rules)
+}
+
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
 }
 
 type CreateRuleRequest struct {
@@ -60,6 +92,7 @@ func (h *RuleHandler) Create(c *fiber.Ctx) error {
 	if err := db.DB.Create(&rule).Error; err != nil {
 		return err
 	}
+	h.publisher.InvalidatePending()
 	db.DB.Preload("Exit", publicExit).First(&rule, rule.ID)
 	return c.Status(201).JSON(rule)
 }
@@ -83,10 +116,6 @@ func (h *RuleHandler) CreateBulk(c *fiber.Ctx) error {
 		if err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": "rule " + strconv.Itoa(i+1) + ": " + err.Error()})
 		}
-		if err := ensureExitExists(db.DB, rule.ExitID); err != nil {
-			return exitReferenceResponse(c, err)
-		}
-
 		key := rule.Type + "\x00" + rule.Pattern
 		if seen[key] {
 			continue
@@ -97,10 +126,14 @@ func (h *RuleHandler) CreateBulk(c *fiber.Ctx) error {
 	if len(rules) == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "no unique rules to create"})
 	}
+	if err := ensureRuleExitsExist(db.DB, rules); err != nil {
+		return exitReferenceResponse(c, err)
+	}
 
 	if err := db.DB.Create(&rules).Error; err != nil {
 		return err
 	}
+	h.publisher.InvalidatePending()
 	ids := make([]uint, 0, len(rules))
 	for _, rule := range rules {
 		ids = append(ids, rule.ID)
@@ -177,6 +210,7 @@ func (h *RuleHandler) Update(c *fiber.Ctx) error {
 	if err := db.DB.Save(&rule).Error; err != nil {
 		return err
 	}
+	h.publisher.InvalidatePending()
 	db.DB.Preload("Exit", publicExit).First(&rule, rule.ID)
 	return c.JSON(rule)
 }
@@ -190,6 +224,7 @@ func (h *RuleHandler) Delete(c *fiber.Ctx) error {
 	if err := db.DB.Delete(&rule).Error; err != nil {
 		return err
 	}
+	h.publisher.InvalidatePending()
 	return c.JSON(fiber.Map{"message": "deleted"})
 }
 

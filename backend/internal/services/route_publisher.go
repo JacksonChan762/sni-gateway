@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"gorm.io/gorm"
 	"sni-gateway/internal/db"
@@ -21,6 +23,7 @@ type Publisher interface {
 	Apply() (string, error)
 	Rollback() error
 	HasPendingChanges() (bool, error)
+	InvalidatePending()
 	WriteHistory(version, status, message, config string)
 }
 
@@ -31,9 +34,11 @@ type routeSnapshot struct {
 
 // RoutePublisher keeps the active table separate from edits in the database.
 type RoutePublisher struct {
-	mu     sync.RWMutex
-	path   string
-	active *RoutingTable
+	mu           sync.Mutex // serializes publication, rollback, and pending checks
+	path         string
+	active       atomic.Pointer[RoutingTable]
+	pending      bool
+	pendingUntil time.Time
 }
 
 func NewRoutePublisher(path string) (*RoutePublisher, error) {
@@ -48,7 +53,7 @@ func NewRoutePublisher(path string) (*RoutePublisher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load published routes: %w", err)
 	}
-	p.active = table
+	p.active.Store(table)
 	return p, nil
 }
 
@@ -139,7 +144,9 @@ func (p *RoutePublisher) Apply() (string, error) {
 	if err := writePrivateFile(p.path, data); err != nil {
 		return "", err
 	}
-	p.active = table
+	p.active.Store(table)
+	p.pending = false
+	p.pendingUntil = time.Now().Add(30 * time.Second)
 	return string(data), nil
 }
 
@@ -164,31 +171,43 @@ func (p *RoutePublisher) Rollback() error {
 	if err := writePrivateFile(p.path+".bak", current); err != nil {
 		return errors.Join(err, writePrivateFile(p.path, current))
 	}
-	p.active = table
+	p.active.Store(table)
+	p.pendingUntil = time.Time{}
 	return nil
 }
 
 func (p *RoutePublisher) HasPendingChanges() (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if time.Now().Before(p.pendingUntil) {
+		return p.pending, nil
+	}
 	data, err := p.snapshot()
 	if err != nil {
 		return false, err
 	}
-	p.mu.RLock()
-	defer p.mu.RUnlock()
 	current, err := os.ReadFile(p.path)
 	if os.IsNotExist(err) {
-		return true, nil
+		p.pending = true
+		p.pendingUntil = time.Now().Add(30 * time.Second)
+		return p.pending, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return string(current) != string(data), nil
+	p.pending = string(current) != string(data)
+	p.pendingUntil = time.Now().Add(30 * time.Second)
+	return p.pending, nil
 }
 
 func (p *RoutePublisher) ExitName(host string) string {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.active.ExitName(host)
+	return p.active.Load().ExitName(host)
+}
+
+func (p *RoutePublisher) InvalidatePending() {
+	p.mu.Lock()
+	p.pendingUntil = time.Time{}
+	p.mu.Unlock()
 }
 
 func (p *RoutePublisher) WriteHistory(version, status, message, config string) {

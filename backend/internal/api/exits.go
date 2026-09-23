@@ -23,11 +23,12 @@ import (
 )
 
 type ExitHandler struct {
-	manager *services.ExitManager
+	manager   *services.ExitManager
+	publisher services.Publisher
 }
 
-func NewExitHandler(mgr *services.ExitManager) *ExitHandler {
-	return &ExitHandler{manager: mgr}
+func NewExitHandler(mgr *services.ExitManager, publisher services.Publisher) *ExitHandler {
+	return &ExitHandler{manager: mgr, publisher: publisher}
 }
 
 func (h *ExitHandler) List(c *fiber.Ctx) error {
@@ -149,6 +150,7 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 			})
 		}
 	}
+	h.publisher.InvalidatePending()
 
 	exit.ConfigJSON = ""
 	return c.Status(201).JSON(exit)
@@ -307,6 +309,7 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	if err := db.DB.Save(&exit).Error; err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	h.publisher.InvalidatePending()
 
 	if err := h.manager.ReconcileAfterUpdate(&before, &exit); err != nil {
 		return c.Status(500).JSON(fiber.Map{
@@ -1064,6 +1067,7 @@ func (h *ExitHandler) Delete(c *fiber.Ctx) error {
 	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
+	h.publisher.InvalidatePending()
 
 	return c.JSON(fiber.Map{"message": "deleted"})
 }

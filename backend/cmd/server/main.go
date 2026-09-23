@@ -29,6 +29,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid PROVIDER_CATALOG_UPDATE_INTERVAL: %v", err)
 	}
+	idleTimeout, err := time.ParseDuration(cfg.TLSIdleTimeout)
+	if err != nil || idleTimeout <= 0 {
+		log.Fatalf("Invalid TLS_IDLE_TIMEOUT: %q", cfg.TLSIdleTimeout)
+	}
 
 	// Wait for Postgres
 	for i := 0; i < 30; i++ {
@@ -72,7 +76,7 @@ func main() {
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 	catalog.StartUpdater(ctx, cfg.ProviderCatalogPath, updateInterval)
-	ingress := &gateway.Server{Router: cfgGen, HTTPAddr: ":80", TLSAddr: ":443"}
+	ingress := &gateway.Server{Router: cfgGen, HTTPAddr: ":80", TLSAddr: ":443", IdleTimeout: idleTimeout}
 	if err := ingress.Start(ctx); err != nil {
 		log.Fatalf("Start SNI ingress: %v", err)
 	}

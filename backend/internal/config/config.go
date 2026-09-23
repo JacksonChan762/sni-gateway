@@ -16,6 +16,7 @@ type Config struct {
 	ExitRestartCron               string
 	ProviderCatalogPath           string
 	ProviderCatalogUpdateInterval string
+	TLSIdleTimeout                string
 }
 
 func Load() *Config {
@@ -30,6 +31,7 @@ func Load() *Config {
 		ExitRestartCron:               getEnv("EXIT_RESTART_CRON", getEnv("NIGHTLY_RESTART_EXITS_CRON", "@every 12h")),
 		ProviderCatalogPath:           getEnv("PROVIDER_CATALOG_PATH", "/var/lib/sni-gateway/providers.json.gz"),
 		ProviderCatalogUpdateInterval: getEnv("PROVIDER_CATALOG_UPDATE_INTERVAL", "24h"),
+		TLSIdleTimeout:                getEnv("TLS_IDLE_TIMEOUT", "5m"),
 	}
 }
 

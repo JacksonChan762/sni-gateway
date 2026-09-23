@@ -280,10 +280,20 @@ func (em *ExitManager) getSingBoxStatus(exit *models.Exit) (string, string, erro
 }
 
 func probeSingBoxPublicIP(name string) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return gateway.DialSOCKS("singbox-"+name+":1080", "api.ipify.org", 443)
-	}}}
-	response, err := client.Get("https://api.ipify.org")
+	return probeSingBoxPublicIPContext(context.Background(), name)
+}
+
+func probeSingBoxPublicIPContext(ctx context.Context, name string) (string, error) {
+	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return gateway.DialSOCKSContext(ctx, "singbox-"+name+":1080", "api.ipify.org", 443)
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Timeout: 10 * time.Second, Transport: transport}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipify.org", nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return "", err
 	}
