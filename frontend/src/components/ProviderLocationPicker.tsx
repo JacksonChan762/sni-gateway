@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { getApiError, getVPNLocations, getVPNProviders } from '../api/client'
 
-export default function ProviderLocationPicker({ protocol, provider, country, city, onChange }: {
+export default function ProviderLocationPicker({ protocol, provider, country, city, runtime, onChange }: {
   protocol: 'wireguard' | 'openvpn'
   provider: string
   country: string
   city: string
+  runtime: string
   onChange: (provider: string, country: string, city: string) => void
 }) {
   const providers = useQuery({ queryKey: ['vpn-providers'], queryFn: getVPNProviders })
@@ -19,7 +20,7 @@ export default function ProviderLocationPicker({ protocol, provider, country, ci
     <label className="label">VPN provider and location</label>
     <select className="input text-xs" aria-label="VPN provider" value={provider}
       onChange={event => onChange(event.target.value, '', '')}>
-      <option value="custom">Custom / use imported server</option>
+      <option value="custom">Custom configuration</option>
       {available.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
     </select>
     {provider !== 'custom' && provider !== '' && <div className="grid grid-cols-2 gap-2">
@@ -36,6 +37,6 @@ export default function ProviderLocationPicker({ protocol, provider, country, ci
     </div>}
     {providers.error && <p className="text-xs text-red-400">Catalog unavailable: {getApiError(providers.error)}</p>}
     {locations.error && <p className="text-xs text-red-400">Could not load locations: {getApiError(locations.error)}</p>}
-    {provider !== 'custom' && <p className="text-xs text-gray-400">A server in this location is selected automatically when the exit starts. Your {protocol === 'openvpn' ? '.ovpn profile' : 'WireGuard client config'} is still required.</p>}
+    {provider !== 'custom' && <p className="text-xs text-gray-400">{runtime === 'gluetun' ? 'Gluetun selects a server in this location. Enter only the credentials required by your provider below.' : 'This existing sing-box exit keeps its current configuration. Change the provider or location to use Gluetun provider mode.'}</p>}
   </div>
 }

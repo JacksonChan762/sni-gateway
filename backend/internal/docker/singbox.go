@@ -15,8 +15,12 @@ import (
 const SingBoxImage = "ghcr.io/sagernet/sing-box:v1.14.1"
 
 // CreateSingBoxContainer starts a per-exit VPN and SOCKS listener on vpn-net.
-func (c *Client) CreateSingBoxContainer(ctx context.Context, name string, config []byte) error {
+func (c *Client) CreateSingBoxContainer(ctx context.Context, name string, config []byte, networkMode ...string) error {
 	containerName := "singbox-" + name
+	mode := VPNNetwork
+	if len(networkMode) != 0 {
+		mode = networkMode[0]
+	}
 	if err := c.ensureImage(ctx, SingBoxImage); err != nil {
 		return fmt.Errorf("sing-box image: %w", err)
 	}
@@ -25,7 +29,7 @@ func (c *Client) CreateSingBoxContainer(ctx context.Context, name string, config
 	}
 	resp, err := c.cli.ContainerCreate(ctx,
 		&container.Config{Image: SingBoxImage, Cmd: []string{"run", "-c", "/tmp/sing-box.json"}},
-		&container.HostConfig{NetworkMode: container.NetworkMode(VPNNetwork), RestartPolicy: container.RestartPolicy{Name: "unless-stopped"}},
+		&container.HostConfig{NetworkMode: container.NetworkMode(mode), RestartPolicy: container.RestartPolicy{Name: "unless-stopped"}},
 		&network.NetworkingConfig{}, nil, containerName)
 	if err != nil {
 		return err

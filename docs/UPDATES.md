@@ -34,9 +34,7 @@ and starts the stack with a 180-second readiness wait. It records the deployed c
 only after success. A failed attempt is retried on the next run even if source already
 advanced. The first run rebuilds once to establish that record.
 
-Compose builds include the current frontend and backend; the installer pulls the pinned official sing-box image. Existing dynamically
-managed sing-box exits keep their running images until restarted in the UI; this updater does not roll
-those containers. Published routes and database volumes are retained. The readiness check
+Compose builds include the current frontend and backend. The installer pulls the pinned sing-box image and the latest Gluetun image. Existing dynamically managed VPN exits keep their running images until restarted in the UI; this updater does not roll those containers. Published routes and database volumes are retained. The readiness check
 covers Compose service health, not end-to-end VPN routing; test a routed domain afterward.
 Backups contain private configuration and have restrictive permissions. Copy them to
 secure storage and periodically remove old backups according to your retention policy.

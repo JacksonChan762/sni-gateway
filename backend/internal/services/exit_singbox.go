@@ -59,7 +59,11 @@ func (em *ExitManager) reconcileSingBox(before, after *models.Exit) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if before.Runtime != "sing-box" {
+	if before.Runtime == "gluetun" {
+		if err := em.removeProviderContainers(ctx, before.Name); err != nil {
+			return err
+		}
+	} else if before.Runtime != "sing-box" {
 		if err := removeExitContainers(ctx, em.docker, before.Name); err != nil {
 			return err
 		}

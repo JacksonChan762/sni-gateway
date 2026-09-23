@@ -62,6 +62,9 @@ func (em *ExitManager) ReconcileAfterUpdate(before, after *models.Exit) error {
 	if after.Runtime == "sing-box" {
 		return em.reconcileSingBox(before, after)
 	}
+	if after.Runtime == "gluetun" {
+		return em.reconcileProvider(before, after)
+	}
 	defer em.lockExit(after.ID)()
 
 	runtimeChanged := exitRuntimeConfigChanged(before, after)
@@ -118,6 +121,9 @@ func (em *ExitManager) ReconcileAfterUpdate(before, after *models.Exit) error {
 func (em *ExitManager) createAndStart(exit *models.Exit) error {
 	if exit.Runtime == "sing-box" {
 		return em.createAndStartSingBox(exit)
+	}
+	if exit.Runtime == "gluetun" {
+		return em.createAndStartProvider(exit)
 	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.updateStatus(exit, "unhealthy")
@@ -193,6 +199,9 @@ func (em *ExitManager) createAndStart(exit *models.Exit) error {
 func (em *ExitManager) start(exit *models.Exit) error {
 	if exit.Runtime == "sing-box" {
 		return em.createAndStartSingBox(exit)
+	}
+	if exit.Runtime == "gluetun" {
+		return em.restartProvider(exit)
 	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.logEvent(exit.ID, "start", "failed", err.Error())
@@ -280,6 +289,9 @@ func (em *ExitManager) Stop(exit *models.Exit) error {
 func (em *ExitManager) restart(exit *models.Exit) error {
 	if exit.Runtime == "sing-box" {
 		return em.createAndStartSingBox(exit)
+	}
+	if exit.Runtime == "gluetun" {
+		return em.restartProvider(exit)
 	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.logEvent(exit.ID, "restart", "failed", err.Error())
@@ -393,6 +405,14 @@ func (em *ExitManager) delete(exit *models.Exit) error {
 	if exit.Runtime == "sing-box" {
 		return em.deleteSingBox(exit)
 	}
+	if exit.Runtime == "gluetun" {
+		if err := em.ensureDockerAvailable(); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		return em.removeProviderContainers(ctx, exit.Name)
+	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.logEvent(exit.ID, "delete", "failed", err.Error())
 		return err
@@ -415,6 +435,9 @@ func (em *ExitManager) GetStatus(exit *models.Exit) (string, string, error) {
 	defer em.lockExit(exit.ID)()
 	if exit.Runtime == "sing-box" {
 		return em.getSingBoxStatus(exit)
+	}
+	if exit.Runtime == "gluetun" {
+		return em.getProviderStatus(exit)
 	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		return "unavailable", "", err
@@ -591,7 +614,7 @@ func changedRuntimeNames(beforeName, afterName string) []string {
 }
 
 func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
-	if exit.Runtime != "sing-box" {
+	if exit.Runtime != "sing-box" && exit.Runtime != "gluetun" {
 		return errors.New("legacy exit: edit it with a complete WireGuard configuration before starting")
 	}
 	defer em.lockExit(exit.ID)()
@@ -599,7 +622,7 @@ func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
 }
 
 func (em *ExitManager) Start(exit *models.Exit) error {
-	if exit.Runtime != "sing-box" {
+	if exit.Runtime != "sing-box" && exit.Runtime != "gluetun" {
 		return errors.New("legacy exit: edit it with a complete WireGuard configuration before starting")
 	}
 	defer em.lockExit(exit.ID)()
@@ -607,7 +630,7 @@ func (em *ExitManager) Start(exit *models.Exit) error {
 }
 
 func (em *ExitManager) Restart(exit *models.Exit) error {
-	if exit.Runtime != "sing-box" {
+	if exit.Runtime != "sing-box" && exit.Runtime != "gluetun" {
 		return errors.New("legacy exit: edit it with a complete WireGuard configuration before starting")
 	}
 	defer em.lockExit(exit.ID)()

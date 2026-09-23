@@ -198,22 +198,33 @@ function parseWireguardEndpoint(value: string) {
 
 function validateExitForm(
   name: string,
+  runtime: string,
   protocol: 'wireguard' | 'openvpn',
   environmentYaml: string,
   openvpnProfile: string,
   provider: string,
-  country: string
+  country: string,
+  openvpnUser: string,
+  openvpnPassword: string,
+  openvpnCert: string,
+  openvpnKey: string
 ) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(name.trim())) return 'Use 1–63 letters, numbers, hyphens, or underscores for the name'
   if (provider !== 'custom' && !country) return 'Choose a country for automatic server selection'
-  if (protocol === 'openvpn') return openvpnProfile.trim() ? '' : 'Import or paste a complete .ovpn profile'
+  if (protocol === 'openvpn') {
+    if (runtime !== 'gluetun') return openvpnProfile.trim() ? '' : 'Import or paste a complete .ovpn profile'
+    if (!['airvpn', 'vpn unlimited'].includes(provider) && (!openvpnUser.trim() || !openvpnPassword.trim())) return 'Enter your provider OpenVPN username and password'
+    if (['airvpn', 'cyberghost', 'vpnsecure', 'vpn unlimited'].includes(provider) && (!openvpnCert.trim() || !openvpnKey.trim())) return 'This provider also requires your OpenVPN client certificate and key'
+    return ''
+  }
   const env = parseEnvYamlBlock(environmentYaml)
   if (protocol === 'wireguard') {
-    if (provider === 'custom' && !env.WIREGUARD_ENDPOINT_IP) return 'WIREGUARD_ENDPOINT_IP is required for custom WireGuard exits'
-    if (!env.WIREGUARD_ENDPOINT_PORT) return 'WIREGUARD_ENDPOINT_PORT is required for custom WireGuard exits'
-    if (provider === 'custom' && !env.WIREGUARD_PUBLIC_KEY) return 'WIREGUARD_PUBLIC_KEY is required for custom WireGuard exits'
+    if (runtime !== 'gluetun' && !env.AUTO_SERVER?.toLowerCase().includes('true') && !env.WIREGUARD_ENDPOINT_IP) return 'WIREGUARD_ENDPOINT_IP is required for custom WireGuard exits'
+    if (runtime !== 'gluetun' && !env.WIREGUARD_ENDPOINT_PORT) return 'WIREGUARD_ENDPOINT_PORT is required for custom WireGuard exits'
+    if (runtime !== 'gluetun' && !env.AUTO_SERVER?.toLowerCase().includes('true') && !env.WIREGUARD_PUBLIC_KEY) return 'WIREGUARD_PUBLIC_KEY is required for custom WireGuard exits'
     if (!env.WIREGUARD_PRIVATE_KEY) return 'WIREGUARD_PRIVATE_KEY is required for custom WireGuard exits'
-    if (!env.WIREGUARD_ADDRESSES) return 'WIREGUARD_ADDRESSES is required for custom WireGuard exits'
+    if ((runtime !== 'gluetun' || !['protonvpn', 'nordvpn'].includes(provider)) && !env.WIREGUARD_ADDRESSES) return 'WIREGUARD_ADDRESSES is required for this provider'
+    if (runtime === 'gluetun' && provider === 'airvpn' && !env.WIREGUARD_PRESHARED_KEY) return 'WIREGUARD_PRESHARED_KEY is required for AirVPN'
   }
   return ''
 }
@@ -396,6 +407,22 @@ export default function Exits() {
   const copyMut = useMutation({
     mutationFn: async (exit: Exit) => {
       const config = await getExitConfig(exit.id)
+      if (exit.runtime === 'gluetun') {
+        const env = parseEnvYamlBlock(extractEnvironmentBlock(config.config_yaml))
+        return createExit({
+          name: uniqueCopyName(exit.name), runtime: 'gluetun', protocol: exit.protocol, enabled: false,
+          provider: exit.provider, country: exit.country, city: exit.city,
+          ...(exit.protocol === 'openvpn' ? {
+            openvpn_user: config.openvpn_user, openvpn_password: config.openvpn_password,
+            openvpn_cert: config.openvpn_cert, openvpn_key: config.openvpn_key,
+            openvpn_key_passphrase: config.openvpn_key_passphrase,
+          } : {
+            wireguard_private_key: env.WIREGUARD_PRIVATE_KEY,
+            wireguard_addresses: env.WIREGUARD_ADDRESSES,
+            wireguard_preshared_key: env.WIREGUARD_PRESHARED_KEY,
+          }),
+        })
+      }
       if (exit.protocol === 'openvpn') return createExit({
         name: uniqueCopyName(exit.name), runtime: 'sing-box', protocol: 'openvpn', enabled: false,
         provider: exit.provider, country: exit.country, city: exit.city,
@@ -418,7 +445,7 @@ export default function Exits() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Exits</h1>
-          <p className="page-subtitle">Manage sing-box WireGuard and OpenVPN exits</p>
+          <p className="page-subtitle">Manage Gluetun provider and sing-box custom VPN exits</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" disabled={runtimeBusy || exits.length === 0} onClick={handleStopAll}>
@@ -549,7 +576,7 @@ function ExitCard({
             <div className="flex items-center gap-2 mb-1">
               <span className="font-semibold text-white">{exit.name}</span>
               <StatusBadge status={exit.status} />
-              {exit.runtime !== 'sing-box' && <span className="badge-yellow">Needs VPN config</span>}
+              {exit.runtime !== 'sing-box' && exit.runtime !== 'gluetun' && <span className="badge-yellow">Needs VPN config</span>}
               {!exit.enabled && <span className="badge-gray">Disabled</span>}
             </div>
             <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
@@ -576,7 +603,7 @@ function ExitCard({
             <Activity size={12} className={checking ? 'animate-pulse' : ''} /> {checking ? 'Checking…' : 'Check status'}
           </button>
           {exit.status !== 'running' && (
-            <button disabled={busy || !exit.enabled || exit.runtime !== 'sing-box'} className="btn-success text-xs" onClick={onStart}>
+            <button disabled={busy || !exit.enabled || !['sing-box', 'gluetun'].includes(exit.runtime)} className="btn-success text-xs" onClick={onStart}>
               <Play size={12} /> Start
             </button>
           )}
@@ -585,13 +612,13 @@ function ExitCard({
               <Square size={12} /> Stop
             </button>
           )}
-          <button disabled={busy || !exit.enabled || exit.runtime !== 'sing-box'} className="btn-secondary text-xs" onClick={onRestart}>
+          <button disabled={busy || !exit.enabled || !['sing-box', 'gluetun'].includes(exit.runtime)} className="btn-secondary text-xs" onClick={onRestart}>
             <RotateCcw size={12} /> Restart
           </button>
           <button className="btn-ghost text-xs" disabled={busy} onClick={onEdit}>
             <Pencil size={12} /> Edit
           </button>
-          <button className="btn-ghost text-xs" disabled={busy || exit.runtime !== 'sing-box'} onClick={onCopy}>
+          <button className="btn-ghost text-xs" disabled={busy || !['sing-box', 'gluetun'].includes(exit.runtime)} onClick={onCopy}>
             <Copy size={12} /> Copy
           </button>
           <button className="btn-ghost text-xs" onClick={onLogs}>
@@ -630,9 +657,13 @@ function ExitFormModal({
     name: exit?.name ?? '',
     enabled: exit?.enabled ?? true,
     protocol: 'wireguard' as 'wireguard' | 'openvpn',
+    runtime: exit?.runtime ?? 'sing-box',
     openvpn_profile: '',
     openvpn_user: '',
     openvpn_password: '',
+    openvpn_cert: '',
+    openvpn_key: '',
+    openvpn_key_passphrase: '',
     provider: exit?.provider ?? 'custom',
     country: exit?.country ?? '',
     city: exit?.city ?? '',
@@ -648,7 +679,13 @@ function ExitFormModal({
 
   const env = parseEnvYamlBlock(form.environment_yaml)
   const knownFieldSet = new Set([...getOrderedEnvKeys(env, form.protocol), 'SERVER_COUNTRIES', 'SERVER_CITIES'])
-  const knownFields = getOrderedEnvKeys(env, form.protocol).filter(key => !['VPN_SERVICE_PROVIDER', 'VPN_TYPE', 'AUTO_SERVER'].includes(key))
+  const knownFields = getOrderedEnvKeys(env, form.protocol).filter(key => {
+    if (['VPN_SERVICE_PROVIDER', 'VPN_TYPE', 'AUTO_SERVER'].includes(key)) return false
+    if (form.runtime !== 'gluetun') return true
+    if (key === 'WIREGUARD_PRIVATE_KEY') return true
+    if (key === 'WIREGUARD_ADDRESSES') return !['protonvpn', 'nordvpn'].includes(form.provider)
+    return key === 'WIREGUARD_PRESHARED_KEY' && form.provider === 'airvpn'
+  })
   const customFields = Object.keys(env).filter(key => !knownFieldSet.has(key))
 
   const updateEnvField = (key: string, value: string) => {
@@ -688,7 +725,7 @@ function ExitFormModal({
     if (!file) return
     const content = await file.text()
     if (file.name.toLowerCase().endsWith('.ovpn') || /^\s*(client|remote|proto)\s/m.test(content)) {
-      setForm(f => ({ ...f, protocol: 'openvpn', openvpn_profile: content }))
+      setForm(f => ({ ...f, protocol: 'openvpn', runtime: 'sing-box', provider: 'custom', country: '', city: '', auto_server: false, openvpn_profile: content }))
       setLocalError('')
       event.target.value = ''
       return
@@ -699,7 +736,7 @@ function ExitFormModal({
     const protocol = 'wireguard'
     importedEnv.VPN_SERVICE_PROVIDER = 'custom'
     importedEnv.VPN_TYPE = 'wireguard'
-    setForm(f => ({ ...f, protocol, provider: 'custom', country: '', city: '', auto_server: false,
+    setForm(f => ({ ...f, protocol, runtime: 'sing-box', provider: 'custom', country: '', city: '', auto_server: false,
       environment_yaml: stringifyEnvYamlBlock(importedEnv, protocol) }))
     setLocalError('')
     event.target.value = ''
@@ -708,26 +745,44 @@ function ExitFormModal({
   useEffect(() => {
     if (!exit || !configData?.config_yaml) return
     if (configData.protocol === 'openvpn') {
-      setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol: 'openvpn',
+      setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol: 'openvpn', runtime: exit.runtime,
         provider: exit.provider, country: exit.country, city: exit.city,
         auto_server: configData.auto_server,
-        openvpn_profile: configData.openvpn_profile ?? '', openvpn_user: configData.openvpn_user ?? '', openvpn_password: configData.openvpn_password ?? '' }))
+        openvpn_profile: configData.openvpn_profile ?? '', openvpn_user: configData.openvpn_user ?? '', openvpn_password: configData.openvpn_password ?? '',
+        openvpn_cert: configData.openvpn_cert ?? '', openvpn_key: configData.openvpn_key ?? '',
+        openvpn_key_passphrase: configData.openvpn_key_passphrase ?? '' }))
       setLocalError('')
       return
     }
     const environmentYaml = extractEnvironmentBlock(configData.config_yaml)
     const env = parseEnvYamlBlock(environmentYaml)
     const protocol = env.VPN_TYPE === 'openvpn' ? 'openvpn' : 'wireguard'
-    setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol,
+    setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol, runtime: exit.runtime,
       provider: exit.provider, country: exit.country, city: exit.city, auto_server: configData.auto_server,
       environment_yaml: stringifyEnvYamlBlock(env, protocol) }))
     setLocalError('')
   }, [configData, exit])
 
   const handleSubmit = () => {
-    const err = validateExitForm(form.name, form.protocol, form.environment_yaml, form.openvpn_profile, form.provider, form.country)
+    const err = validateExitForm(form.name, form.runtime, form.protocol, form.environment_yaml, form.openvpn_profile, form.provider, form.country,
+      form.openvpn_user, form.openvpn_password, form.openvpn_cert, form.openvpn_key)
     if (err) { setLocalError(err); return }
     setLocalError('')
+    if (form.runtime === 'gluetun') {
+      const credentials = parseEnvYamlBlock(form.environment_yaml)
+      onSubmit({ name: form.name, enabled: form.enabled, runtime: 'gluetun', protocol: form.protocol,
+        provider: form.provider, country: form.country, city: form.city,
+        ...(form.protocol === 'wireguard' ? {
+          wireguard_private_key: credentials.WIREGUARD_PRIVATE_KEY ?? '',
+          wireguard_addresses: credentials.WIREGUARD_ADDRESSES ?? '',
+          wireguard_preshared_key: credentials.WIREGUARD_PRESHARED_KEY ?? '',
+        } : {
+          openvpn_user: form.openvpn_user, openvpn_password: form.openvpn_password,
+          openvpn_cert: form.openvpn_cert, openvpn_key: form.openvpn_key, openvpn_key_passphrase: form.openvpn_key_passphrase,
+        }),
+      })
+      return
+    }
     if (form.protocol === 'openvpn') {
       onSubmit({ name: form.name, enabled: form.enabled, runtime: 'sing-box', protocol: 'openvpn',
         provider: form.provider, country: form.country, city: form.city,
@@ -747,7 +802,7 @@ function ExitFormModal({
     next.SERVER_COUNTRIES = country
     next.SERVER_CITIES = city
     next.AUTO_SERVER = String(auto_server)
-    setForm(f => ({ ...f, provider, country, city, auto_server,
+    setForm(f => ({ ...f, provider, country, city, auto_server, runtime: auto_server ? 'gluetun' : 'sing-box',
       environment_yaml: stringifyEnvYamlBlock(next, 'wireguard') }))
     setLocalError('')
   }
@@ -798,22 +853,23 @@ function ExitFormModal({
               <button
                 type="button"
                 className={form.protocol === 'wireguard' ? 'btn-primary' : 'btn-secondary'}
-                onClick={() => setForm(f => ({
-                  ...f, protocol: 'wireguard',
-                  environment_yaml: convertEnvironmentBlock(f.environment_yaml, 'wireguard'),
+                onClick={() => setForm(f => f.protocol === 'wireguard' ? f : ({
+                  ...f, protocol: 'wireguard', runtime: 'sing-box', provider: 'custom', country: '', city: '', auto_server: false,
+                  environment_yaml: stringifyEnvYamlBlock({ ...parseEnvYamlBlock(convertEnvironmentBlock(f.environment_yaml, 'wireguard')),
+                    VPN_SERVICE_PROVIDER: 'custom', SERVER_COUNTRIES: '', SERVER_CITIES: '', AUTO_SERVER: 'false' }, 'wireguard'),
                 }))}
               >
                 <Wifi size={14} /> WireGuard
               </button>
               <button type="button" className={form.protocol === 'openvpn' ? 'btn-primary' : 'btn-secondary'}
-                onClick={() => setForm(f => ({ ...f, protocol: 'openvpn' }))}>
+                onClick={() => setForm(f => f.protocol === 'openvpn' ? f : ({ ...f, protocol: 'openvpn', runtime: 'sing-box', provider: 'custom', country: '', city: '', auto_server: false }))}>
                 <Shield size={14} /> OpenVPN
               </button>
             </div>
           </div>
 
           {/* Import file */}
-          <div>
+          {form.runtime !== 'gluetun' && <div>
             <label className="label">Import Config File</label>
             <input
               className="input text-xs"
@@ -822,23 +878,31 @@ function ExitFormModal({
               onChange={handleImportFile}
             />
             <p className="text-xs text-gray-600 mt-1">Supports WireGuard .conf and inline OpenVPN .ovpn profiles</p>
-          </div>
+          </div>}
 
           {/* Environment fields */}
           <ProviderLocationPicker protocol={form.protocol} provider={form.provider} country={form.country}
-            city={form.city} onChange={selectLocation} />
+            city={form.city} runtime={form.runtime} onChange={selectLocation} />
           {form.protocol === 'openvpn' ? <div className="space-y-3">
-            <div>
+            {form.runtime !== 'gluetun' && <div>
               <label className="label">OpenVPN profile *</label>
               <textarea className="input font-mono text-xs min-h-[180px]" value={form.openvpn_profile}
                 placeholder={'client\ndev tun\nremote 203.0.113.10 1194\n<ca>\n...\n</ca>'}
                 onChange={e => setForm(f => ({ ...f, openvpn_profile: e.target.value }))} />
               <p className="text-xs text-gray-600 mt-1">Embed CA, client certificate, and keys in the profile. External file paths are not supported.</p>
-            </div>
-            <div><label className="label">Username (if required)</label><input className="input" value={form.openvpn_user}
-              onChange={e => setForm(f => ({ ...f, openvpn_user: e.target.value }))} /></div>
-            <div><label className="label">Password (if required)</label><input className="input" type="password" value={form.openvpn_password}
-              onChange={e => setForm(f => ({ ...f, openvpn_password: e.target.value }))} /></div>
+            </div>}
+            {(form.runtime !== 'gluetun' || !['airvpn', 'vpn unlimited'].includes(form.provider)) && <div><label className="label">OpenVPN username {form.runtime !== 'gluetun' ? '(if required)' : '*'}</label><input className="input" value={form.openvpn_user}
+              onChange={e => setForm(f => ({ ...f, openvpn_user: e.target.value }))} /></div>}
+            {(form.runtime !== 'gluetun' || !['airvpn', 'vpn unlimited'].includes(form.provider)) && <div><label className="label">OpenVPN password {form.runtime !== 'gluetun' ? '(if required)' : '*'}</label><input className="input" type="password" value={form.openvpn_password}
+              onChange={e => setForm(f => ({ ...f, openvpn_password: e.target.value }))} /></div>}
+            {form.runtime === 'gluetun' && ['airvpn', 'cyberghost', 'vpnsecure', 'vpn unlimited'].includes(form.provider) && <>
+              <div><label className="label">Client certificate *</label><textarea className="input font-mono text-xs min-h-24" value={form.openvpn_cert}
+                placeholder="Paste PEM certificate" onChange={e => setForm(f => ({ ...f, openvpn_cert: e.target.value }))} /></div>
+              <div><label className="label">Client key *</label><textarea className="input font-mono text-xs min-h-24" value={form.openvpn_key}
+                placeholder="Paste PEM private key" onChange={e => setForm(f => ({ ...f, openvpn_key: e.target.value }))} /></div>
+              <div><label className="label">Key passphrase (if encrypted)</label><input className="input" type="password" value={form.openvpn_key_passphrase}
+                onChange={e => setForm(f => ({ ...f, openvpn_key_passphrase: e.target.value }))} /></div>
+            </>}
           </div> : <>
           <div>
             <label className="label">WireGuard connection</label>
@@ -860,7 +924,7 @@ function ExitFormModal({
                   />
                 </div>
               ))}
-              {customFields.map(key => (
+              {form.runtime !== 'gluetun' && customFields.map(key => (
                 <div key={key} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_auto] gap-2 items-end">
                   <div>
                     <label className="label">Key</label>
@@ -889,12 +953,12 @@ function ExitFormModal({
                   </button>
                 </div>
               ))}
-              <button type="button" className="btn-secondary text-xs" onClick={addEnvField}>
+              {form.runtime !== 'gluetun' && <button type="button" className="btn-secondary text-xs" onClick={addEnvField}>
                 <Plus size={13} /> Add Variable
-              </button>
+              </button>}
             </div>
             <p className="text-xs text-gray-600 mt-1.5">
-              Import a WireGuard .conf file for your private key, address, and port. The selected provider and location supply the server endpoint and public key.
+              {form.runtime !== 'gluetun' ? 'Import a WireGuard .conf file or enter a complete custom connection.' : 'Gluetun supplies the server endpoint and port. Enter the client values required by this provider.'}
             </p>
           </div>
           </>}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"sni-gateway/internal/catalog"
+	"sni-gateway/internal/provider"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -11,7 +12,13 @@ func listVPNProviders(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
-	return c.JSON(fiber.Map{"providers": providers, "source_commit": commit})
+	filtered := make([]catalog.Provider, 0, len(providers))
+	for _, item := range providers {
+		if provider.Native(item.Name) {
+			filtered = append(filtered, item)
+		}
+	}
+	return c.JSON(fiber.Map{"providers": filtered, "source_commit": commit})
 }
 
 func searchVPNServers(c *fiber.Ctx) error {

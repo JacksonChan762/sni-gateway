@@ -39,7 +39,12 @@ func removeExitContainers(ctx context.Context, client containerRemover, name str
 }
 
 func (em *ExitManager) stopWithContext(ctx context.Context, exit *models.Exit) error {
-	if exit.Runtime == "sing-box" { return em.stopSingBox(ctx, exit) }
+	if exit.Runtime == "sing-box" {
+		return em.stopSingBox(ctx, exit)
+	}
+	if exit.Runtime == "gluetun" {
+		return em.stopProvider(ctx, exit)
+	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		return err
 	}

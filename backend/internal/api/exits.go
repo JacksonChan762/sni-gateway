@@ -13,6 +13,7 @@ import (
 
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/models"
+	"sni-gateway/internal/provider"
 	"sni-gateway/internal/services"
 	"sni-gateway/internal/singbox"
 
@@ -56,6 +57,9 @@ type CreateExitRequest struct {
 	OpenVPNUser           string `json:"openvpn_user"`
 	OpenVPNPassword       string `json:"openvpn_password"`
 	OpenVPNProfile        string `json:"openvpn_profile"`
+	OpenVPNCert           string `json:"openvpn_cert"`
+	OpenVPNKey            string `json:"openvpn_key"`
+	OpenVPNKeyPassphrase  string `json:"openvpn_key_passphrase"`
 	ConfigYAML            string `json:"config_yaml"`
 	Enabled               *bool  `json:"enabled"`
 }
@@ -90,6 +94,19 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 	if req.Provider == "" {
 		req.Provider = "custom"
 	}
+	if req.Runtime == "" {
+		if req.Provider == "custom" {
+			req.Runtime = "sing-box"
+		} else {
+			req.Runtime = "gluetun"
+		}
+	}
+	if req.Runtime != "sing-box" && req.Runtime != "gluetun" {
+		return c.Status(400).JSON(fiber.Map{"error": "runtime must be sing-box or gluetun"})
+	}
+	if req.Runtime == "gluetun" && req.Provider == "custom" {
+		return c.Status(400).JSON(fiber.Map{"error": "choose a Gluetun provider"})
+	}
 	if req.Protocol != "wireguard" && req.Protocol != "openvpn" {
 		return c.Status(400).JSON(fiber.Map{"error": "protocol must be wireguard or openvpn"})
 	}
@@ -102,12 +119,6 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 		enabled = *req.Enabled
 	}
 	runtime := req.Runtime
-	if runtime == "" {
-		runtime = "sing-box"
-	}
-	if runtime != "sing-box" {
-		return c.Status(400).JSON(fiber.Map{"error": "runtime must be sing-box"})
-	}
 
 	configJSON, err := buildExitConfigJSON(req)
 	if err != nil {
@@ -170,6 +181,12 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 	}
+	if req.Runtime != "" {
+		if req.Runtime != "sing-box" && req.Runtime != "gluetun" {
+			return c.Status(400).JSON(fiber.Map{"error": "runtime must be sing-box or gluetun"})
+		}
+		exit.Runtime = req.Runtime
+	}
 
 	if req.Name != "" {
 		if !exitNamePattern.MatchString(req.Name) {
@@ -190,7 +207,7 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		exit.Country = req.Country
 		exit.City = req.City
 	} else {
-		if req.AutoServer != nil {
+		if req.AutoServer != nil || req.Runtime == "gluetun" {
 			exit.Provider, exit.Country, exit.City = req.Provider, req.Country, req.City
 		}
 		if req.Protocol != "" {
@@ -211,6 +228,12 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	}
 
 	if req.ConfigYAML != "" {
+		configJSON, err := buildExitConfigJSON(req)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		exit.ConfigJSON = configJSON
+	} else if req.Runtime == "gluetun" {
 		configJSON, err := buildExitConfigJSON(req)
 		if err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -254,6 +277,15 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		if req.OpenVPNProfile != "" {
 			creds["openvpn_profile"] = req.OpenVPNProfile
 		}
+		if req.OpenVPNCert != "" {
+			creds["openvpn_cert"] = req.OpenVPNCert
+		}
+		if req.OpenVPNKey != "" {
+			creds["openvpn_key"] = req.OpenVPNKey
+		}
+		if req.OpenVPNKeyPassphrase != "" {
+			creds["openvpn_key_passphrase"] = req.OpenVPNKeyPassphrase
+		}
 		if len(creds) > 0 {
 			if raw, err := json.Marshal(creds); err == nil {
 				exit.ConfigJSON = string(raw)
@@ -267,7 +299,9 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	if err := normalizeExitConfig(&exit); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
-	exit.Runtime = "sing-box"
+	if exit.Runtime == "" {
+		exit.Runtime = "sing-box"
+	}
 
 	if err := db.DB.Save(&exit).Error; err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -297,6 +331,7 @@ func (h *ExitHandler) Config(c *fiber.Ctx) error {
 	creds := parseExitCredentials(exit.ConfigJSON)
 	return c.JSON(fiber.Map{"config_yaml": configYAML, "protocol": exit.Protocol,
 		"openvpn_profile": creds["openvpn_profile"], "openvpn_user": creds["openvpn_user"], "openvpn_password": creds["openvpn_password"],
+		"openvpn_cert": creds["openvpn_cert"], "openvpn_key": creds["openvpn_key"], "openvpn_key_passphrase": creds["openvpn_key_passphrase"],
 		"auto_server": creds["auto_server"] == "true"})
 }
 
@@ -317,6 +352,7 @@ func parseExitCredentials(raw string) map[string]string {
 		{"WIREGUARD_ADDRESSES", "wireguard_addresses"}, {"WIREGUARD_DNS", "wireguard_dns"},
 		{"OPENVPN_USER", "openvpn_user"}, {"OPENVPN_PASSWORD", "openvpn_password"},
 		{"OPENVPN_PROFILE", "openvpn_profile"},
+		{"OPENVPN_CERT", "openvpn_cert"}, {"OPENVPN_KEY", "openvpn_key"}, {"OPENVPN_KEY_PASSPHRASE", "openvpn_key_passphrase"},
 		{"AUTO_SERVER", "auto_server"},
 	} {
 		if value := firstConfigValue(env, data, pair[0], pair[1]); value != "" {
@@ -327,6 +363,13 @@ func parseExitCredentials(raw string) map[string]string {
 }
 
 func validateExitRequest(req CreateExitRequest) error {
+	if req.Runtime == "gluetun" {
+		config, err := buildExitConfigJSON(req)
+		if err != nil {
+			return err
+		}
+		return provider.Validate(models.Exit{Protocol: req.Protocol, Provider: req.Provider, Country: req.Country, City: req.City, ConfigJSON: config})
+	}
 	auto := req.AutoServer != nil && *req.AutoServer
 	if auto && (req.Provider == "" || req.Provider == "custom" || req.Country == "") {
 		return fmt.Errorf("choose a VPN provider and country for automatic server selection")
@@ -429,6 +472,7 @@ func validateExitConfig(exit *models.Exit) error {
 	}
 	env := extractStoredComposeEnv(raw)
 	req := CreateExitRequest{
+		Runtime:               exit.Runtime,
 		Name:                  exit.Name,
 		Protocol:              exit.Protocol,
 		Provider:              exit.Provider,
@@ -445,6 +489,9 @@ func validateExitConfig(exit *models.Exit) error {
 		OpenVPNUser:           firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
 		OpenVPNPassword:       firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
 		OpenVPNProfile:        firstConfigValue(env, raw, "OPENVPN_PROFILE", "openvpn_profile"),
+		OpenVPNCert:           firstConfigValue(env, raw, "OPENVPN_CERT", "openvpn_cert"),
+		OpenVPNKey:            firstConfigValue(env, raw, "OPENVPN_KEY", "openvpn_key"),
+		OpenVPNKeyPassphrase:  firstConfigValue(env, raw, "OPENVPN_KEY_PASSPHRASE", "openvpn_key_passphrase"),
 	}
 	if value, err := strconv.ParseBool(firstConfigValue(env, raw, "AUTO_SERVER", "auto_server")); err == nil {
 		req.AutoServer = &value
@@ -462,10 +509,13 @@ func normalizeExitConfig(exit *models.Exit) error {
 	env := extractStoredComposeEnv(raw)
 	if exit.Protocol == "openvpn" {
 		fields := map[string]string{
-			"auto_server":      firstConfigValue(env, raw, "AUTO_SERVER", "auto_server"),
-			"openvpn_profile":  firstConfigValue(env, raw, "OPENVPN_PROFILE", "openvpn_profile"),
-			"openvpn_user":     firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
-			"openvpn_password": firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
+			"auto_server":            firstConfigValue(env, raw, "AUTO_SERVER", "auto_server"),
+			"openvpn_profile":        firstConfigValue(env, raw, "OPENVPN_PROFILE", "openvpn_profile"),
+			"openvpn_user":           firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
+			"openvpn_password":       firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
+			"openvpn_cert":           firstConfigValue(env, raw, "OPENVPN_CERT", "openvpn_cert"),
+			"openvpn_key":            firstConfigValue(env, raw, "OPENVPN_KEY", "openvpn_key"),
+			"openvpn_key_passphrase": firstConfigValue(env, raw, "OPENVPN_KEY_PASSPHRASE", "openvpn_key_passphrase"),
 		}
 		data, err := json.Marshal(fields)
 		if err != nil {
@@ -580,6 +630,15 @@ func applyYAMLToExitRequest(req *CreateExitRequest) error {
 	if v := getString("openvpn_profile"); v != "" {
 		req.OpenVPNProfile = v
 	}
+	if v := getString("openvpn_cert"); v != "" {
+		req.OpenVPNCert = v
+	}
+	if v := getString("openvpn_key"); v != "" {
+		req.OpenVPNKey = v
+	}
+	if v := getString("openvpn_key_passphrase"); v != "" {
+		req.OpenVPNKeyPassphrase = v
+	}
 	if enabled, ok := raw["enabled"].(bool); ok {
 		req.Enabled = &enabled
 	}
@@ -609,6 +668,9 @@ func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest)
 	}
 
 	req.Runtime = "sing-box"
+	if value, ok := raw["runtime"].(string); ok && value == "gluetun" {
+		req.Runtime = "gluetun"
+	}
 
 	if enabled, ok := raw["enabled"].(bool); ok {
 		req.Enabled = &enabled
@@ -671,6 +733,15 @@ func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest)
 	}
 	if v := env["OPENVPN_PROFILE"]; v != "" {
 		req.OpenVPNProfile = v
+	}
+	if v := env["OPENVPN_CERT"]; v != "" {
+		req.OpenVPNCert = v
+	}
+	if v := env["OPENVPN_KEY"]; v != "" {
+		req.OpenVPNKey = v
+	}
+	if v := env["OPENVPN_KEY_PASSPHRASE"]; v != "" {
+		req.OpenVPNKeyPassphrase = v
 	}
 
 	return true
@@ -760,6 +831,15 @@ func buildExitConfigJSON(req CreateExitRequest) (string, error) {
 	if req.OpenVPNProfile != "" {
 		raw["openvpn_profile"] = req.OpenVPNProfile
 	}
+	if req.OpenVPNCert != "" {
+		raw["openvpn_cert"] = req.OpenVPNCert
+	}
+	if req.OpenVPNKey != "" {
+		raw["openvpn_key"] = req.OpenVPNKey
+	}
+	if req.OpenVPNKeyPassphrase != "" {
+		raw["openvpn_key_passphrase"] = req.OpenVPNKeyPassphrase
+	}
 
 	encoded, err := json.Marshal(raw)
 	if err != nil {
@@ -778,10 +858,11 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 	if exit.Protocol == "openvpn" {
 		creds := parseExitCredentials(exit.ConfigJSON)
 		encoded, err := yaml.Marshal(map[string]interface{}{
-			"runtime": "sing-box", "protocol": "openvpn", "enabled": exit.Enabled,
+			"runtime": exit.Runtime, "protocol": "openvpn", "enabled": exit.Enabled,
 			"provider": exit.Provider, "country": exit.Country, "city": exit.City,
 			"auto_server":     creds["auto_server"] == "true",
 			"openvpn_profile": creds["openvpn_profile"], "openvpn_user": creds["openvpn_user"], "openvpn_password": creds["openvpn_password"],
+			"openvpn_cert": creds["openvpn_cert"], "openvpn_key": creds["openvpn_key"], "openvpn_key_passphrase": creds["openvpn_key_passphrase"],
 		})
 		return string(encoded), err
 	}
@@ -803,10 +884,15 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 	copyRawString(raw, envMap, "openvpn_user", "OPENVPN_USER")
 	copyRawString(raw, envMap, "openvpn_password", "OPENVPN_PASSWORD")
 
+	serviceName := "singbox"
+	if exit.Runtime == "gluetun" {
+		serviceName = "gluetun"
+	}
 	compose := map[string]interface{}{
+		"runtime": exit.Runtime,
 		"enabled": exit.Enabled,
 		"services": map[string]interface{}{
-			"singbox": map[string]interface{}{
+			serviceName: map[string]interface{}{
 				"environment": orderedEnvironment(envMap, exit.Protocol),
 			},
 		},

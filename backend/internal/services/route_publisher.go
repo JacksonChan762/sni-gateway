@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/models"
+	"sni-gateway/internal/provider"
 	"sni-gateway/internal/singbox"
 )
 
@@ -86,10 +87,16 @@ func (p *RoutePublisher) snapshot() ([]byte, error) {
 		}
 		exit, exists := exitByID[*rule.ExitID]
 		if exists {
-			if exit.Runtime != "sing-box" {
+			if exit.Runtime != "sing-box" && exit.Runtime != "gluetun" {
 				return nil, fmt.Errorf("rule %d uses legacy exit %q; edit it with a complete WireGuard configuration", rule.ID, exit.Name)
 			}
-			if _, err := singbox.BuildExitConfig(exit); err != nil {
+			var err error
+			if exit.Runtime == "gluetun" {
+				err = provider.Validate(exit)
+			} else {
+				_, err = singbox.BuildExitConfig(exit)
+			}
+			if err != nil {
 				return nil, fmt.Errorf("rule %d uses invalid exit %q: %w", rule.ID, exit.Name, err)
 			}
 			checked[*rule.ExitID] = true

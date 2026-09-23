@@ -52,6 +52,7 @@ install_stack() {
   echo "Building and starting services; this may take a few minutes..."
   trap 'echo "Installation did not complete. Check: docker compose ps; docker compose logs --tail=100" >&2' ERR
   docker image inspect ghcr.io/sagernet/sing-box:v1.14.1 >/dev/null 2>&1 || docker pull ghcr.io/sagernet/sing-box:v1.14.1
+  docker pull qmcgaw/gluetun:latest
   docker compose up -d --build --remove-orphans --wait --wait-timeout 180
   stop_legacy_exits
   trap - EXIT
@@ -107,6 +108,7 @@ update_stack() {
   git merge --ff-only "$target"
   docker compose config --quiet
   docker image inspect ghcr.io/sagernet/sing-box:v1.14.1 >/dev/null 2>&1 || docker pull ghcr.io/sagernet/sing-box:v1.14.1
+  docker pull qmcgaw/gluetun:latest
   docker compose build --pull
   docker compose up -d --remove-orphans --wait --wait-timeout 180
   stop_legacy_exits
@@ -117,7 +119,7 @@ update_stack() {
 
 stop_legacy_exits() {
   local name prefix legacy_names
-  legacy_names="$(docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U sni -d sni_gateway -Atc "SELECT name FROM exits WHERE runtime IS DISTINCT FROM 'sing-box' ORDER BY id")"
+  legacy_names="$(docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U sni -d sni_gateway -Atc "SELECT name FROM exits WHERE runtime IS DISTINCT FROM 'sing-box' AND runtime IS DISTINCT FROM 'gluetun' ORDER BY id")"
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
     for prefix in gluetun- relay-; do
@@ -126,7 +128,7 @@ stop_legacy_exits() {
       fi
     done
   done <<< "$legacy_names"
-  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U sni -d sni_gateway -c "UPDATE exits SET status = 'stopped', public_ip = '', updated_at = NOW() WHERE runtime IS DISTINCT FROM 'sing-box'" >/dev/null
+  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U sni -d sni_gateway -c "UPDATE exits SET status = 'stopped', public_ip = '', updated_at = NOW() WHERE runtime IS DISTINCT FROM 'sing-box' AND runtime IS DISTINCT FROM 'gluetun'" >/dev/null
 }
 
 usage() {

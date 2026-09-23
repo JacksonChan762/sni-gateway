@@ -1,4 +1,4 @@
-# API reference — sing-box migration
+# API reference — Gluetun providers and sing-box custom exits
 
 The admin API listens on `http://127.0.0.1:8080` by default. `GET /health` and `POST /api/auth/login` are public. All other `/api/*` endpoints require `Authorization: Bearer <token>`.
 
@@ -12,11 +12,11 @@ Use the returned `token` in the requests below. The installer stores the generat
 
 ## Provider server catalog
 
-Authenticated `GET /api/providers` lists providers in the cached [Gluetun servers catalog](https://github.com/qdm12/gluetun-servers), protocol counts, countries, and source commit. The catalog checks upstream at startup and daily by default, retaining the last working copy on failed updates. `GET /api/providers/locations` accepts `provider`, `protocol` (`openvpn` or `wireguard`), and optional `country`; it returns country and city counts. The UI selects provider, country, and optional city; the backend selects a compatible server automatically when building the connection. `GET /api/providers/servers` remains available with `provider`, `protocol`, optional `country` and `query`, and `offset`/`limit` (at most 100). The response contains `total`, `servers`, and `source_commit`. Client credentials, WireGuard interface keys/addresses, and OpenVPN certificates are not part of the catalog.
+Authenticated `GET /api/providers` lists providers in the cached [Gluetun servers catalog](https://github.com/qdm12/gluetun-servers), protocol counts, countries, and source commit. The catalog checks upstream at startup and daily by default, retaining the last working copy on failed updates. `GET /api/providers/locations` accepts `provider`, `protocol` (`openvpn` or `wireguard`), and optional `country`; it returns country and city counts. The UI selects provider, country, and optional city. Gluetun selects the actual VPN server and updates its active provider data every 480 hours after the tunnel is ready. `GET /api/providers/servers` remains available with `provider`, `protocol`, optional `country` and `query`, and `offset`/`limit` (at most 100). The response contains `total`, `servers`, and `source_commit`. Client credentials, WireGuard interface keys/addresses, and OpenVPN certificates are not part of the catalog.
 
 ## Exits
 
-`POST /api/exits` accepts a complete WireGuard or OpenVPN connection. `runtime` defaults to `sing-box`; `protocol` is `wireguard` or `openvpn`. For WireGuard, the private key and peer public key must be base64-encoded 32-byte keys, and the endpoint must be an IP address.
+`POST /api/exits` accepts either a built-in Gluetun provider (`runtime: "gluetun"`) or a complete custom connection (`runtime: "sing-box"`). If omitted, runtime follows the provider: `custom` uses sing-box, a built-in provider uses Gluetun. `protocol` is `wireguard` or `openvpn`.
 
 ```json
 {
@@ -35,14 +35,29 @@ Authenticated `GET /api/providers` lists providers in the cached [Gluetun server
 }
 ```
 
-`wireguard_preshared_key` is optional. The peer must allow `0.0.0.0/0` because the gateway forwards arbitrary matched domains; there is no direct fallback. DNS queries for destination domains use the selected VPN exit. Set `auto_server: true` with a catalog `provider` and `country` (optional `city`) to have the backend choose a WireGuard endpoint and peer public key. The client private key, address, and endpoint port are still required. Without `auto_server`, supply the endpoint IP and peer public key as before. OpenVPN credentials alone are insufficient; a complete `.ovpn` profile is required.
+For built-in OpenVPN providers, submit `provider`, `country`, optional `city`, `openvpn_user`, and `openvpn_password`. AirVPN, CyberGhost, VPN Secure, and VPN Unlimited also require `openvpn_cert` and `openvpn_key` (PEM text or base64 body); encrypted keys can use `openvpn_key_passphrase`. Gluetun supplies the provider’s public CA, TLS settings, server and port. For built-in WireGuard, submit `wireguard_private_key`; most providers also require `wireguard_addresses` in CIDR format, while Proton VPN and NordVPN have Gluetun defaults. AirVPN also requires `wireguard_preshared_key`. The API validates required fields before creating a container. For example:
 
-For OpenVPN, submit the `.ovpn` text in `openvpn_profile`. With `auto_server: true`, `provider`, `country`, and optional `city`, the backend substitutes a compatible catalog server IP for the profile remote host while retaining the profile port and security settings. A server-specific certificate name or provider-specific port may prevent that profile from working with another catalog server. The profile needs a `remote` server and inline `<ca>` certificate. Include inline `<cert>` and `<key>` together when client certificate authentication is required. Set `openvpn_user` and `openvpn_password` together when the provider requires username/password authentication. External file references and unsupported directives return validation errors. Example:
+```json
+{
+  "name": "proton-nl",
+  "runtime": "gluetun",
+  "protocol": "openvpn",
+  "provider": "protonvpn",
+  "country": "Netherlands",
+  "openvpn_user": "YOUR_OPENVPN_SERVICE_USERNAME",
+  "openvpn_password": "YOUR_OPENVPN_SERVICE_PASSWORD",
+  "enabled": true
+}
+```
+
+Custom WireGuard uses a private key, peer public key, endpoint IP/port, and tunnel address. The peer must allow `0.0.0.0/0`. `wireguard_preshared_key` is optional. Custom OpenVPN accepts a complete portable `.ovpn` profile in `openvpn_profile`; inline CA and any client certificate/key are required. External file references and unsupported directives return validation errors. Custom examples:
 
 ```json
 {
   "name": "office-vpn",
+  "runtime": "sing-box",
   "protocol": "openvpn",
+  "provider": "custom",
   "openvpn_profile": "client\nproto udp\nremote vpn.example.com 1194\nremote-cert-tls server\n<ca>\n-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n</ca>\n",
   "openvpn_user": "YOUR_USERNAME",
   "openvpn_password": "YOUR_PASSWORD",
@@ -50,7 +65,7 @@ For OpenVPN, submit the `.ovpn` text in `openvpn_profile`. With `auto_server: tr
 }
 ```
 
-The `config_yaml` import/export format is also accepted. WireGuard uses a `services.singbox.environment` list of `WIREGUARD_*` variables. OpenVPN export uses top-level `openvpn_profile`, `openvpn_user`, `openvpn_password`, `auto_server`, and location fields. This is an application format, not a standalone Compose deployment. The config endpoint returns secrets and should be handled accordingly.
+The `config_yaml` import/export format is also accepted. WireGuard uses a `services.singbox.environment` or `services.gluetun.environment` list of `WIREGUARD_*` variables, depending on runtime. OpenVPN export uses top-level profile or provider credentials, `runtime`, and location fields. This is an application format, not a standalone Compose deployment. The config endpoint returns secrets and should be handled accordingly.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -64,12 +79,12 @@ The `config_yaml` import/export format is also accepted. WireGuard uses a `servi
 | `POST /api/exits/stop-all` | Stop every exit |
 | `GET /api/exits/:id/status` | Check the container and VPN public IP |
 | `POST /api/exits/:id/test` | Perform the same connection check |
-| `GET /api/exits/:id/logs` | Return sing-box logs |
+| `GET /api/exits/:id/logs` | Return sing-box logs for Custom exits or Gluetun logs for provider exits |
 | `GET /api/exits/:id/config` | Return configuration including secrets; handle carefully |
 
 Starting an exit probes its public IP through the sing-box SOCKS listener. A successful probe records `status: "running"` and `public_ip`; a failed probe preserves the exit as `status: "unhealthy"` so its logs can be inspected and the connection retried. `POST /api/exits/:id/start` and `/restart` return the resulting status and public IP.
 
-Older Gluetun exits remain in the database during migration. Edit one with a complete WireGuard or OpenVPN configuration to convert it to sing-box. The API rejects attempts to start a legacy exit before conversion.
+Older relay-based exits remain in the database during migration. Edit one with valid provider credentials to use the Gluetun provider runtime, or with a complete WireGuard or OpenVPN configuration to use sing-box. The API rejects attempts to start an unconverted legacy exit.
 
 ## Rules and subscriptions
 

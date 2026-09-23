@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -64,6 +65,7 @@ type GluetunConfig struct {
 	OpenVPNUser     string
 	OpenVPNPass     string
 	ExtraEnv        map[string]string
+	ProxyAlias      bool
 }
 
 type RelayConfig struct {
@@ -87,23 +89,25 @@ func (c *Client) CreateGluetunContainer(ctx context.Context, cfg GluetunConfig) 
 		return fmt.Errorf("ensure gluetun image: %w", err)
 	}
 
+	endpoints := &network.NetworkingConfig{}
+	host := &container.HostConfig{
+		CapAdd:        []string{"NET_ADMIN"},
+		Resources:     container.Resources{Devices: []container.DeviceMapping{{PathOnHost: "/dev/net/tun", PathInContainer: "/dev/net/tun", CgroupPermissions: "rwm"}}},
+		Sysctls:       map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"},
+		NetworkMode:   container.NetworkMode(VPNNetwork),
+		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+	}
+	if cfg.ProxyAlias {
+		endpoints.EndpointsConfig = map[string]*network.EndpointSettings{VPNNetwork: {Aliases: []string{"singbox-" + cfg.Name}}}
+		host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "sni-gateway-gluetun-" + cfg.Name, Target: "/gluetun"}}
+	}
 	resp, err := c.cli.ContainerCreate(ctx,
 		&container.Config{
 			Image: imageRef,
 			Env:   env,
 		},
-		&container.HostConfig{
-			CapAdd: []string{"NET_ADMIN"},
-			Resources: container.Resources{
-				Devices: []container.DeviceMapping{
-					{PathOnHost: "/dev/net/tun", PathInContainer: "/dev/net/tun", CgroupPermissions: "rwm"},
-				},
-			},
-			Sysctls:       map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"},
-			NetworkMode:   container.NetworkMode(VPNNetwork),
-			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
-		},
-		&network.NetworkingConfig{},
+		host,
+		endpoints,
 		nil,
 		containerName,
 	)
