@@ -128,13 +128,17 @@ export const getPublishStatus = () => api.get<{ pending: boolean }>('/publish/st
 
 export const getExits = () => api.get<Exit[]>('/exits').then(r => r.data)
 export const getVPNProviders = () => api.get<{ providers: VPNProvider[]; source_commit: string }>('/providers').then(r => r.data)
+export const getVPNLocations = (provider: string, protocol: string, country: string) => {
+  const params = new URLSearchParams({ provider, protocol, country })
+  return api.get<{ source_commit: string; countries: { name: string; count: number }[]; cities: { name: string; count: number }[] }>(`/providers/locations?${params}`).then(r => r.data)
+}
 export const searchVPNServers = (provider: string, protocol: string, country: string, query: string, offset: number) => {
   const params = new URLSearchParams({ provider, protocol, country, query, offset: String(offset), limit: '50' })
   return api.get<{ source_commit: string; total: number; servers: VPNServer[] }>(`/providers/servers?${params}`).then(r => r.data)
 }
-export const createExit = (data: Partial<Exit> & { config_yaml?: string; wireguard_private_key?: string; wireguard_addresses?: string; wireguard_dns?: string; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>
+export const createExit = (data: Partial<Exit> & { config_yaml?: string; auto_server?: boolean; wireguard_private_key?: string; wireguard_addresses?: string; wireguard_dns?: string; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>
   api.post<Exit>('/exits', data).then(r => r.data)
-export const updateExit = (id: number, data: Partial<Exit> & { config_yaml?: string; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>
+export const updateExit = (id: number, data: Partial<Exit> & { config_yaml?: string; auto_server?: boolean; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>
   api.put<Exit>(`/exits/${id}`, data).then(r => r.data)
 export const deleteExit = (id: number) => api.delete(`/exits/${id}`).then(r => r.data)
 export const startExit = (id: number) => api.post<{ status: string; public_ip: string }>(`/exits/${id}/start`).then(r => r.data)
@@ -142,7 +146,7 @@ export const stopExit = (id: number) => api.post(`/exits/${id}/stop`).then(r => 
 export const restartExit = (id: number) => api.post<{ status: string; public_ip: string }>(`/exits/${id}/restart`).then(r => r.data)
 export const testExit = (id: number) => api.post(`/exits/${id}/test`).then(r => r.data)
 export const getExitConfig = (id: number) =>
-  api.get<{ config_yaml: string; protocol: string; openvpn_profile: string; openvpn_user: string; openvpn_password: string }>(`/exits/${id}/config`).then(r => r.data)
+  api.get<{ config_yaml: string; protocol: string; auto_server: boolean; openvpn_profile: string; openvpn_user: string; openvpn_password: string }>(`/exits/${id}/config`).then(r => r.data)
 export const getExitLogs = (id: number, tail = 100) =>
   api.get<{ logs: string }>(`/exits/${id}/logs?tail=${tail}`).then(r => r.data)
 export const getExitStatus = (id: number) =>

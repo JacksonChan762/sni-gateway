@@ -12,7 +12,7 @@ Use the returned `token` in the requests below. The installer stores the generat
 
 ## Provider server catalog
 
-Authenticated `GET /api/providers` lists the 23 providers in the bundled [Gluetun servers snapshot](https://github.com/qdm12/gluetun-servers), protocol counts, countries, and the pinned source commit. `GET /api/providers/servers` accepts `provider`, `protocol` (`openvpn` or `wireguard`), optional `country` and `query`, and `offset`/`limit` (at most 100). The response contains `total`, `servers`, and `source_commit`. Server records include IP, hostname, location, supported transports, and WireGuard server public key where available. Client credentials, WireGuard interface keys/addresses, and OpenVPN certificates are not present. A server selected in the UI updates the exit config; it is not a live provider subscription.
+Authenticated `GET /api/providers` lists providers in the cached [Gluetun servers catalog](https://github.com/qdm12/gluetun-servers), protocol counts, countries, and source commit. The catalog checks upstream at startup and daily by default, retaining the last working copy on failed updates. `GET /api/providers/locations` accepts `provider`, `protocol` (`openvpn` or `wireguard`), and optional `country`; it returns country and city counts. The UI selects provider, country, and optional city; the backend selects a compatible server automatically when building the connection. `GET /api/providers/servers` remains available with `provider`, `protocol`, optional `country` and `query`, and `offset`/`limit` (at most 100). The response contains `total`, `servers`, and `source_commit`. Client credentials, WireGuard interface keys/addresses, and OpenVPN certificates are not part of the catalog.
 
 ## Exits
 
@@ -35,9 +35,9 @@ Authenticated `GET /api/providers` lists the 23 providers in the bundled [Gluetu
 }
 ```
 
-`wireguard_preshared_key` is optional. The peer must allow `0.0.0.0/0` because the gateway forwards arbitrary matched domains; there is no direct fallback. DNS queries for destination domains use the selected VPN exit. A provider name, country, private key, and address without the peer endpoint/public key are insufficient. OpenVPN credentials alone are also insufficient; a complete `.ovpn` profile is required.
+`wireguard_preshared_key` is optional. The peer must allow `0.0.0.0/0` because the gateway forwards arbitrary matched domains; there is no direct fallback. DNS queries for destination domains use the selected VPN exit. Set `auto_server: true` with a catalog `provider` and `country` (optional `city`) to have the backend choose a WireGuard endpoint and peer public key. The client private key, address, and endpoint port are still required. Without `auto_server`, supply the endpoint IP and peer public key as before. OpenVPN credentials alone are insufficient; a complete `.ovpn` profile is required.
 
-For OpenVPN, submit the `.ovpn` text in `openvpn_profile`. The profile needs a `remote` server and inline `<ca>` certificate. Include inline `<cert>` and `<key>` together when client certificate authentication is required. Set `openvpn_user` and `openvpn_password` together when the provider requires username/password authentication. External file references and unsupported directives return validation errors. Example:
+For OpenVPN, submit the `.ovpn` text in `openvpn_profile`. With `auto_server: true`, `provider`, `country`, and optional `city`, the backend substitutes a compatible catalog server IP for the profile remote host while retaining the profile port and security settings. A server-specific certificate name or provider-specific port may prevent that profile from working with another catalog server. The profile needs a `remote` server and inline `<ca>` certificate. Include inline `<cert>` and `<key>` together when client certificate authentication is required. Set `openvpn_user` and `openvpn_password` together when the provider requires username/password authentication. External file references and unsupported directives return validation errors. Example:
 
 ```json
 {
@@ -50,7 +50,7 @@ For OpenVPN, submit the `.ovpn` text in `openvpn_profile`. The profile needs a `
 }
 ```
 
-The `config_yaml` import/export format is also accepted. WireGuard uses a `services.singbox.environment` list of `WIREGUARD_*` variables. OpenVPN export uses top-level `openvpn_profile`, `openvpn_user`, and `openvpn_password` fields. This is an application format, not a standalone Compose deployment. The config endpoint returns secrets and should be handled accordingly.
+The `config_yaml` import/export format is also accepted. WireGuard uses a `services.singbox.environment` list of `WIREGUARD_*` variables. OpenVPN export uses top-level `openvpn_profile`, `openvpn_user`, `openvpn_password`, `auto_server`, and location fields. This is an application format, not a standalone Compose deployment. The config endpoint returns secrets and should be handled accordingly.
 
 | Endpoint | Purpose |
 | --- | --- |

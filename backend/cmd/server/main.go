@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"sni-gateway/internal/api"
+	"sni-gateway/internal/catalog"
 	"sni-gateway/internal/config"
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/docker"
@@ -21,6 +22,13 @@ func main() {
 	_ = godotenv.Load()
 
 	cfg := config.Load()
+	if err := catalog.LoadCache(cfg.ProviderCatalogPath); err != nil {
+		log.Printf("Provider catalog cache unavailable; using bundled data: %v", err)
+	}
+	updateInterval, err := time.ParseDuration(cfg.ProviderCatalogUpdateInterval)
+	if err != nil {
+		log.Fatalf("Invalid PROVIDER_CATALOG_UPDATE_INTERVAL: %v", err)
+	}
 
 	// Wait for Postgres
 	for i := 0; i < 30; i++ {
@@ -63,6 +71,7 @@ func main() {
 
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
+	catalog.StartUpdater(ctx, cfg.ProviderCatalogPath, updateInterval)
 	ingress := &gateway.Server{Router: cfgGen, HTTPAddr: ":80", TLSAddr: ":443"}
 	if err := ingress.Start(ctx); err != nil {
 		log.Fatalf("Start SNI ingress: %v", err)

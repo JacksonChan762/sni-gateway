@@ -231,3 +231,31 @@ func TestBuildManualRuleDefaultsMissingTypeToAuto(t *testing.T) {
 		t.Fatalf("type = %q, want exact", rule.Type)
 	}
 }
+
+func TestAutomaticServerConfigRoundTrip(t *testing.T) {
+	auto := true
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	req := CreateExitRequest{Name: "auto-us", Protocol: "wireguard", Provider: "protonvpn", Country: "United States", City: "New York", AutoServer: &auto,
+		WireguardPrivKey: key, WireguardAddresses: "10.2.0.2/32", WireguardEndpointPort: "51820"}
+	if err := validateExitRequest(req); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := buildExitConfigJSON(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := &models.Exit{Name: req.Name, Protocol: req.Protocol, Provider: req.Provider, Country: req.Country, City: req.City, ConfigJSON: encoded}
+	if err := normalizeExitConfig(exit); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateExitConfig(exit); err != nil {
+		t.Fatal(err)
+	}
+	yamlText, err := buildExitConfigYAML(exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(yamlText, "AUTO_SERVER=true") || !strings.Contains(yamlText, "SERVER_CITIES=New York") {
+		t.Fatalf("lost automatic selection: %s", yamlText)
+	}
+}

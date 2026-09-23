@@ -60,3 +60,47 @@ func TestBuildExitConfigRejectsNonVPNOrIncompletePeer(t *testing.T) {
 		t.Fatal("unsupported protocol accepted")
 	}
 }
+
+func TestAutomaticServerChangesWireguardEndpoint(t *testing.T) {
+	exit := wireguardExit("0.0.0.0/0")
+	exit.Name, exit.Provider, exit.Country, exit.City = "auto-us", "protonvpn", "United States", "New York"
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(exit.ConfigJSON), &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["auto_server"] = true
+	delete(raw, "wireguard_endpoint_ip")
+	delete(raw, "wireguard_public_key")
+	encoded, _ := json.Marshal(raw)
+	exit.ConfigJSON = string(encoded)
+	built, err := BuildExitConfig(exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(built, &config); err != nil {
+		t.Fatal(err)
+	}
+	peer := config["endpoints"].([]any)[0].(map[string]any)["peers"].([]any)[0].(map[string]any)
+	if peer["address"] == "203.0.113.10" || peer["public_key"] == "" {
+		t.Fatalf("catalog server not applied: %+v", peer)
+	}
+}
+
+func TestAutomaticServerChangesOpenVPNRemote(t *testing.T) {
+	fields := map[string]any{"auto_server": true, "openvpn_profile": "client\nproto udp\nremote 203.0.113.10 1194\n<ca>\nTEST CA\n</ca>\n"}
+	encoded, _ := json.Marshal(fields)
+	exit := models.Exit{Name: "auto-af", Protocol: "openvpn", Provider: "protonvpn", Country: "Afghanistan", City: "Kabul", ConfigJSON: string(encoded)}
+	built, err := BuildExitConfig(exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(built, &config); err != nil {
+		t.Fatal(err)
+	}
+	remote := config["endpoints"].([]any)[0].(map[string]any)["servers"].([]any)[0].(map[string]any)
+	if remote["server"] == "203.0.113.10" || remote["server_port"] != float64(1194) {
+		t.Fatalf("catalog remote not applied: %+v", remote)
+	}
+}

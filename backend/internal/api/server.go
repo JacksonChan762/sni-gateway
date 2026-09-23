@@ -84,6 +84,7 @@ func (s *Server) registerRoutes() {
 
 	// Exits
 	api.Get("/providers", listVPNProviders)
+	api.Get("/providers/locations", listVPNLocations)
 	api.Get("/providers/servers", searchVPNServers)
 	api.Get("/exits", s.exits.List)
 	api.Post("/exits", s.exits.Create)

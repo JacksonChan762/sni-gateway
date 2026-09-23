@@ -49,3 +49,27 @@ func TestSearchPaginationAndValidation(t *testing.T) {
 		t.Fatal("unbounded page accepted")
 	}
 }
+
+func TestLocationSelectionIsStableAndWithinSelectedCity(t *testing.T) {
+	locations, err := ListLocations("protonvpn", "openvpn", "Afghanistan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locations.Countries) == 0 || len(locations.Cities) == 0 {
+		t.Fatalf("missing locations: %+v", locations)
+	}
+	first, err := Select("protonvpn", "openvpn", "Afghanistan", "Kabul", "my-exit", "udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Select("protonvpn", "openvpn", "Afghanistan", "Kabul", "my-exit", "udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second || first.Country != "Afghanistan" || first.City != "Kabul" || !first.UDP {
+		t.Fatalf("wrong selection: %+v %+v", first, second)
+	}
+	if _, err := Select("protonvpn", "openvpn", "Afghanistan", "missing city", "my-exit"); err == nil {
+		t.Fatal("accepted unavailable city")
+	}
+}

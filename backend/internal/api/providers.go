@@ -21,3 +21,11 @@ func searchVPNServers(c *fiber.Ctx) error {
 	}
 	return c.JSON(page)
 }
+
+func listVPNLocations(c *fiber.Ctx) error {
+	locations, err := catalog.ListLocations(c.Query("provider"), c.Query("protocol"), c.Query("country"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(locations)
+}

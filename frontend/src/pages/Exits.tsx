@@ -4,7 +4,7 @@ import {
   getExits, createExit, updateExit, deleteExit,
   startExit, stopExit, stopAllExits, restartExit, getExitLogs, getExitConfig, getExitStatus, getApiError,
 } from '../api/client'
-import { type Exit, type VPNServer } from '../api/client'
+import { type Exit } from '../api/client'
 import {
   Plus, Play, Square, RotateCcw, Trash2, Terminal,
   Globe, X, Pencil, Wifi, Shield, Copy, Activity,
@@ -12,12 +12,13 @@ import {
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/ConfirmModal'
 import PublishStatusNotice from '../components/PublishStatusNotice'
-import ProviderServerPicker from '../components/ProviderServerPicker'
+import ProviderLocationPicker from '../components/ProviderLocationPicker'
 
 // ─── VPN config helpers ───────────────────────────────────────────────────────
 
 const customWireguardOrder = [
   'VPN_SERVICE_PROVIDER', 'VPN_TYPE',
+  'AUTO_SERVER',
   'WIREGUARD_ENDPOINT_IP', 'WIREGUARD_ENDPOINT_PORT',
   'WIREGUARD_PUBLIC_KEY', 'WIREGUARD_PRIVATE_KEY',
   'WIREGUARD_PRESHARED_KEY', 'WIREGUARD_ADDRESSES',
@@ -30,6 +31,7 @@ const openvpnOrder = [
 const envLabels: Record<string, string> = {
   VPN_SERVICE_PROVIDER: 'VPN Provider',
   VPN_TYPE: 'Protocol',
+  AUTO_SERVER: 'Select server automatically',
   SERVER_COUNTRIES: 'Country',
   SERVER_CITIES: 'City',
   WIREGUARD_ENDPOINT_IP: 'WireGuard Endpoint IP',
@@ -198,33 +200,22 @@ function validateExitForm(
   name: string,
   protocol: 'wireguard' | 'openvpn',
   environmentYaml: string,
-  openvpnProfile: string
+  openvpnProfile: string,
+  provider: string,
+  country: string
 ) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(name.trim())) return 'Use 1–63 letters, numbers, hyphens, or underscores for the name'
+  if (provider !== 'custom' && !country) return 'Choose a country for automatic server selection'
   if (protocol === 'openvpn') return openvpnProfile.trim() ? '' : 'Import or paste a complete .ovpn profile'
   const env = parseEnvYamlBlock(environmentYaml)
   if (protocol === 'wireguard') {
-    if (!env.WIREGUARD_ENDPOINT_IP) return 'WIREGUARD_ENDPOINT_IP is required for custom WireGuard exits'
+    if (provider === 'custom' && !env.WIREGUARD_ENDPOINT_IP) return 'WIREGUARD_ENDPOINT_IP is required for custom WireGuard exits'
     if (!env.WIREGUARD_ENDPOINT_PORT) return 'WIREGUARD_ENDPOINT_PORT is required for custom WireGuard exits'
-    if (!env.WIREGUARD_PUBLIC_KEY) return 'WIREGUARD_PUBLIC_KEY is required for custom WireGuard exits'
+    if (provider === 'custom' && !env.WIREGUARD_PUBLIC_KEY) return 'WIREGUARD_PUBLIC_KEY is required for custom WireGuard exits'
     if (!env.WIREGUARD_PRIVATE_KEY) return 'WIREGUARD_PRIVATE_KEY is required for custom WireGuard exits'
     if (!env.WIREGUARD_ADDRESSES) return 'WIREGUARD_ADDRESSES is required for custom WireGuard exits'
   }
   return ''
-}
-
-function useOpenVPNServer(profile: string, ip: string) {
-  let replaced = false
-  const lines = profile.split('\n').filter(line => {
-    if (!/^\s*remote\s+/i.test(line)) return true
-    if (replaced) return false
-    replaced = true
-    return true
-  })
-  if (!replaced) return null
-  return lines.map(line => /^\s*remote\s+/i.test(line)
-    ? line.replace(/^(\s*remote\s+)\S+/i, (_match, prefix: string) => `${prefix}${ip}`)
-    : line).join('\n')
 }
 
 function normalizeEnvKey(key: string) {
@@ -645,6 +636,7 @@ function ExitFormModal({
     provider: exit?.provider ?? 'custom',
     country: exit?.country ?? '',
     city: exit?.city ?? '',
+    auto_server: false,
     environment_yaml: stringifyEnvYamlBlock({
       VPN_SERVICE_PROVIDER: 'custom', VPN_TYPE: 'wireguard',
       WIREGUARD_ENDPOINT_IP: '', WIREGUARD_ENDPOINT_PORT: '',
@@ -655,8 +647,8 @@ function ExitFormModal({
   const [showPreview, setShowPreview] = useState(false)
 
   const env = parseEnvYamlBlock(form.environment_yaml)
-  const knownFields = getOrderedEnvKeys(env, form.protocol)
-  const knownFieldSet = new Set(knownFields)
+  const knownFieldSet = new Set([...getOrderedEnvKeys(env, form.protocol), 'SERVER_COUNTRIES', 'SERVER_CITIES'])
+  const knownFields = getOrderedEnvKeys(env, form.protocol).filter(key => !['VPN_SERVICE_PROVIDER', 'VPN_TYPE', 'AUTO_SERVER'].includes(key))
   const customFields = Object.keys(env).filter(key => !knownFieldSet.has(key))
 
   const updateEnvField = (key: string, value: string) => {
@@ -707,7 +699,8 @@ function ExitFormModal({
     const protocol = 'wireguard'
     importedEnv.VPN_SERVICE_PROVIDER = 'custom'
     importedEnv.VPN_TYPE = 'wireguard'
-    setForm(f => ({ ...f, protocol, environment_yaml: stringifyEnvYamlBlock(importedEnv, protocol) }))
+    setForm(f => ({ ...f, protocol, provider: 'custom', country: '', city: '', auto_server: false,
+      environment_yaml: stringifyEnvYamlBlock(importedEnv, protocol) }))
     setLocalError('')
     event.target.value = ''
   }
@@ -717,6 +710,7 @@ function ExitFormModal({
     if (configData.protocol === 'openvpn') {
       setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol: 'openvpn',
         provider: exit.provider, country: exit.country, city: exit.city,
+        auto_server: configData.auto_server,
         openvpn_profile: configData.openvpn_profile ?? '', openvpn_user: configData.openvpn_user ?? '', openvpn_password: configData.openvpn_password ?? '' }))
       setLocalError('')
       return
@@ -724,17 +718,20 @@ function ExitFormModal({
     const environmentYaml = extractEnvironmentBlock(configData.config_yaml)
     const env = parseEnvYamlBlock(environmentYaml)
     const protocol = env.VPN_TYPE === 'openvpn' ? 'openvpn' : 'wireguard'
-    setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol, environment_yaml: stringifyEnvYamlBlock(env, protocol) }))
+    setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol,
+      provider: exit.provider, country: exit.country, city: exit.city, auto_server: configData.auto_server,
+      environment_yaml: stringifyEnvYamlBlock(env, protocol) }))
     setLocalError('')
   }, [configData, exit])
 
   const handleSubmit = () => {
-    const err = validateExitForm(form.name, form.protocol, form.environment_yaml, form.openvpn_profile)
+    const err = validateExitForm(form.name, form.protocol, form.environment_yaml, form.openvpn_profile, form.provider, form.country)
     if (err) { setLocalError(err); return }
     setLocalError('')
     if (form.protocol === 'openvpn') {
       onSubmit({ name: form.name, enabled: form.enabled, runtime: 'sing-box', protocol: 'openvpn',
         provider: form.provider, country: form.country, city: form.city,
+        auto_server: form.auto_server,
         openvpn_profile: form.openvpn_profile, openvpn_user: form.openvpn_user, openvpn_password: form.openvpn_password })
       return
     }
@@ -743,26 +740,16 @@ function ExitFormModal({
 
   const displayError = localError || error
 
-  const selectServer = (provider: string, server: VPNServer) => {
-    if (form.protocol === 'openvpn') {
-      const profile = useOpenVPNServer(form.openvpn_profile, server.ip)
-      if (!profile) {
-        setLocalError('Import a complete .ovpn profile with a remote line before selecting a server')
-        return false
-      }
-      setForm(f => ({ ...f, openvpn_profile: profile, provider, country: server.country, city: server.city }))
-    } else {
-      if (!server.public_key) { setLocalError('This server has no WireGuard public key'); return false }
-      const next = parseEnvYamlBlock(form.environment_yaml)
-      next.VPN_SERVICE_PROVIDER = provider
-      next.SERVER_COUNTRIES = server.country
-      next.SERVER_CITIES = server.city
-      next.WIREGUARD_ENDPOINT_IP = server.ip
-      next.WIREGUARD_PUBLIC_KEY = server.public_key
-      setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, 'wireguard') }))
-    }
+  const selectLocation = (provider: string, country: string, city: string) => {
+    const auto_server = provider !== 'custom' && provider !== ''
+    const next = parseEnvYamlBlock(form.environment_yaml)
+    next.VPN_SERVICE_PROVIDER = provider
+    next.SERVER_COUNTRIES = country
+    next.SERVER_CITIES = city
+    next.AUTO_SERVER = String(auto_server)
+    setForm(f => ({ ...f, provider, country, city, auto_server,
+      environment_yaml: stringifyEnvYamlBlock(next, 'wireguard') }))
     setLocalError('')
-    return true
   }
 
   return (
@@ -838,7 +825,8 @@ function ExitFormModal({
           </div>
 
           {/* Environment fields */}
-          <ProviderServerPicker protocol={form.protocol} onSelect={selectServer} />
+          <ProviderLocationPicker protocol={form.protocol} provider={form.provider} country={form.country}
+            city={form.city} onChange={selectLocation} />
           {form.protocol === 'openvpn' ? <div className="space-y-3">
             <div>
               <label className="label">OpenVPN profile *</label>
@@ -906,7 +894,7 @@ function ExitFormModal({
               </button>
             </div>
             <p className="text-xs text-gray-600 mt-1.5">
-              Import a WireGuard .conf file, or enter its endpoint, keys, and interface address. Provider name and region alone are insufficient.
+              Import a WireGuard .conf file for your private key, address, and port. The selected provider and location supply the server endpoint and public key.
             </p>
           </div>
           </>}

@@ -44,6 +44,7 @@ type CreateExitRequest struct {
 	Provider              string `json:"provider"`
 	Country               string `json:"country"`
 	City                  string `json:"city"`
+	AutoServer            *bool  `json:"auto_server"`
 	WireguardPrivKey      string `json:"wireguard_private_key"`
 	WireguardPublicKey    string `json:"wireguard_public_key"`
 	WireguardEndpointIP   string `json:"wireguard_endpoint_ip"`
@@ -189,6 +190,9 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		exit.Country = req.Country
 		exit.City = req.City
 	} else {
+		if req.AutoServer != nil {
+			exit.Provider, exit.Country, exit.City = req.Provider, req.Country, req.City
+		}
 		if req.Protocol != "" {
 			exit.Protocol = req.Protocol
 		}
@@ -214,6 +218,9 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		exit.ConfigJSON = configJSON
 	} else {
 		creds := parseExitCredentials(exit.ConfigJSON)
+		if req.AutoServer != nil {
+			creds["auto_server"] = strconv.FormatBool(*req.AutoServer)
+		}
 		if req.WireguardPrivKey != "" {
 			creds["wireguard_private_key"] = req.WireguardPrivKey
 		}
@@ -289,7 +296,8 @@ func (h *ExitHandler) Config(c *fiber.Ctx) error {
 
 	creds := parseExitCredentials(exit.ConfigJSON)
 	return c.JSON(fiber.Map{"config_yaml": configYAML, "protocol": exit.Protocol,
-		"openvpn_profile": creds["openvpn_profile"], "openvpn_user": creds["openvpn_user"], "openvpn_password": creds["openvpn_password"]})
+		"openvpn_profile": creds["openvpn_profile"], "openvpn_user": creds["openvpn_user"], "openvpn_password": creds["openvpn_password"],
+		"auto_server": creds["auto_server"] == "true"})
 }
 
 func parseExitCredentials(raw string) map[string]string {
@@ -309,6 +317,7 @@ func parseExitCredentials(raw string) map[string]string {
 		{"WIREGUARD_ADDRESSES", "wireguard_addresses"}, {"WIREGUARD_DNS", "wireguard_dns"},
 		{"OPENVPN_USER", "openvpn_user"}, {"OPENVPN_PASSWORD", "openvpn_password"},
 		{"OPENVPN_PROFILE", "openvpn_profile"},
+		{"AUTO_SERVER", "auto_server"},
 	} {
 		if value := firstConfigValue(env, data, pair[0], pair[1]); value != "" {
 			result[pair[1]] = value
@@ -318,14 +327,18 @@ func parseExitCredentials(raw string) map[string]string {
 }
 
 func validateExitRequest(req CreateExitRequest) error {
+	auto := req.AutoServer != nil && *req.AutoServer
+	if auto && (req.Provider == "" || req.Provider == "custom" || req.Country == "") {
+		return fmt.Errorf("choose a VPN provider and country for automatic server selection")
+	}
 	if req.Protocol == "wireguard" {
-		if req.WireguardEndpointIP == "" {
+		if !auto && req.WireguardEndpointIP == "" {
 			return fmt.Errorf("wireguard_endpoint_ip is required for custom wireguard exits")
 		}
 		if req.WireguardEndpointPort == "" {
 			return fmt.Errorf("wireguard_endpoint_port is required for custom wireguard exits")
 		}
-		if req.WireguardPublicKey == "" {
+		if !auto && req.WireguardPublicKey == "" {
 			return fmt.Errorf("wireguard_public_key is required for custom wireguard exits")
 		}
 		if req.WireguardPrivKey == "" {
@@ -334,8 +347,10 @@ func validateExitRequest(req CreateExitRequest) error {
 		if req.WireguardAddresses == "" {
 			return fmt.Errorf("wireguard_addresses is required for custom wireguard exits")
 		}
-		if _, err := netip.ParseAddr(req.WireguardEndpointIP); err != nil {
-			return fmt.Errorf("wireguard_endpoint_ip must be an IP address for custom wireguard exits")
+		if !auto {
+			if _, err := netip.ParseAddr(req.WireguardEndpointIP); err != nil {
+				return fmt.Errorf("wireguard_endpoint_ip must be an IP address for custom wireguard exits")
+			}
 		}
 		port, err := strconv.Atoi(req.WireguardEndpointPort)
 		if err != nil || port < 1 || port > 65535 {
@@ -362,7 +377,7 @@ func validateExitRequest(req CreateExitRequest) error {
 		if err != nil {
 			return err
 		}
-		_, err = singbox.BuildExitConfig(models.Exit{Protocol: "wireguard", ConfigJSON: config})
+		_, err = singbox.BuildExitConfig(models.Exit{Name: req.Name, Protocol: "wireguard", Provider: req.Provider, Country: req.Country, City: req.City, ConfigJSON: config})
 		if err != nil {
 			return err
 		}
@@ -373,7 +388,7 @@ func validateExitRequest(req CreateExitRequest) error {
 		if err != nil {
 			return err
 		}
-		_, err = singbox.BuildExitConfig(models.Exit{Protocol: "openvpn", ConfigJSON: config})
+		_, err = singbox.BuildExitConfig(models.Exit{Name: req.Name, Protocol: "openvpn", Provider: req.Provider, Country: req.Country, City: req.City, ConfigJSON: config})
 		return err
 	}
 	return fmt.Errorf("protocol must be wireguard or openvpn")
@@ -414,8 +429,11 @@ func validateExitConfig(exit *models.Exit) error {
 	}
 	env := extractStoredComposeEnv(raw)
 	req := CreateExitRequest{
+		Name:                  exit.Name,
 		Protocol:              exit.Protocol,
 		Provider:              exit.Provider,
+		Country:               exit.Country,
+		City:                  exit.City,
 		WireguardPrivKey:      firstConfigValue(env, raw, "WIREGUARD_PRIVATE_KEY", "wireguard_private_key"),
 		WireguardPublicKey:    firstConfigValue(env, raw, "WIREGUARD_PUBLIC_KEY", "wireguard_public_key"),
 		WireguardEndpointIP:   firstConfigValue(env, raw, "WIREGUARD_ENDPOINT_IP", "wireguard_endpoint_ip"),
@@ -427,6 +445,9 @@ func validateExitConfig(exit *models.Exit) error {
 		OpenVPNUser:           firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
 		OpenVPNPassword:       firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
 		OpenVPNProfile:        firstConfigValue(env, raw, "OPENVPN_PROFILE", "openvpn_profile"),
+	}
+	if value, err := strconv.ParseBool(firstConfigValue(env, raw, "AUTO_SERVER", "auto_server")); err == nil {
+		req.AutoServer = &value
 	}
 	return validateExitRequest(req)
 }
@@ -441,6 +462,7 @@ func normalizeExitConfig(exit *models.Exit) error {
 	env := extractStoredComposeEnv(raw)
 	if exit.Protocol == "openvpn" {
 		fields := map[string]string{
+			"auto_server":      firstConfigValue(env, raw, "AUTO_SERVER", "auto_server"),
 			"openvpn_profile":  firstConfigValue(env, raw, "OPENVPN_PROFILE", "openvpn_profile"),
 			"openvpn_user":     firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
 			"openvpn_password": firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
@@ -462,6 +484,7 @@ func normalizeExitConfig(exit *models.Exit) error {
 		{"WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"},
 		{"WIREGUARD_ADDRESSES", "wireguard_addresses"},
 		{"WIREGUARD_DNS", "wireguard_dns"},
+		{"AUTO_SERVER", "auto_server"},
 	} {
 		if value := firstConfigValue(env, raw, pair[0], pair[1]); value != "" {
 			fields[pair[1]] = value
@@ -516,6 +539,13 @@ func applyYAMLToExitRequest(req *CreateExitRequest) error {
 	}
 	if v := getString("city"); v != "" {
 		req.City = v
+	}
+	if value, ok := raw["auto_server"]; ok {
+		parsed, err := strconv.ParseBool(fmt.Sprint(value))
+		if err != nil {
+			return fmt.Errorf("auto_server must be a boolean")
+		}
+		req.AutoServer = &parsed
 	}
 	if v := getString("wireguard_private_key"); v != "" {
 		req.WireguardPrivKey = v
@@ -603,6 +633,12 @@ func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest)
 	if v := env["SERVER_CITIES"]; v != "" {
 		req.City = v
 	}
+	if value, ok := env["AUTO_SERVER"]; ok {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			req.AutoServer = &parsed
+		}
+	}
 	if v := env["WIREGUARD_PRIVATE_KEY"]; v != "" {
 		req.WireguardPrivKey = v
 	}
@@ -685,6 +721,9 @@ func buildExitConfigJSON(req CreateExitRequest) (string, error) {
 	if req.City != "" {
 		raw["city"] = req.City
 	}
+	if req.AutoServer != nil {
+		raw["auto_server"] = *req.AutoServer
+	}
 	if req.Enabled != nil {
 		raw["enabled"] = *req.Enabled
 	}
@@ -740,6 +779,8 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 		creds := parseExitCredentials(exit.ConfigJSON)
 		encoded, err := yaml.Marshal(map[string]interface{}{
 			"runtime": "sing-box", "protocol": "openvpn", "enabled": exit.Enabled,
+			"provider": exit.Provider, "country": exit.Country, "city": exit.City,
+			"auto_server":     creds["auto_server"] == "true",
 			"openvpn_profile": creds["openvpn_profile"], "openvpn_user": creds["openvpn_user"], "openvpn_password": creds["openvpn_password"],
 		})
 		return string(encoded), err
@@ -750,6 +791,7 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 	envMap["VPN_TYPE"] = exit.Protocol
 	envMap["SERVER_COUNTRIES"] = exit.Country
 	envMap["SERVER_CITIES"] = exit.City
+	envMap["AUTO_SERVER"] = firstConfigValue(envMap, raw, "AUTO_SERVER", "auto_server")
 	copyRawString(raw, envMap, "wireguard_private_key", "WIREGUARD_PRIVATE_KEY")
 	copyRawString(raw, envMap, "wireguard_public_key", "WIREGUARD_PUBLIC_KEY")
 	copyRawString(raw, envMap, "wireguard_endpoint_ip", "WIREGUARD_ENDPOINT_IP")
@@ -813,6 +855,7 @@ func orderedEnvironment(env map[string]string, protocol string) []string {
 		"VPN_TYPE",
 		"SERVER_COUNTRIES",
 		"SERVER_CITIES",
+		"AUTO_SERVER",
 		"WIREGUARD_PRIVATE_KEY",
 		"WIREGUARD_ADDRESSES",
 	}
@@ -820,6 +863,7 @@ func orderedEnvironment(env map[string]string, protocol string) []string {
 		order = []string{
 			"VPN_SERVICE_PROVIDER",
 			"VPN_TYPE",
+			"AUTO_SERVER",
 			"WIREGUARD_ENDPOINT_IP",
 			"WIREGUARD_ENDPOINT_PORT",
 			"WIREGUARD_PUBLIC_KEY",

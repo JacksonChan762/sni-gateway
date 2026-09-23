@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 //go:embed data/servers.json.gz
@@ -47,7 +49,7 @@ type Page struct {
 }
 
 var once sync.Once
-var snapshot Snapshot
+var snapshot atomic.Pointer[Snapshot]
 var loadErr error
 
 func Load() (Snapshot, error) {
@@ -69,15 +71,21 @@ func Load() (Snapshot, error) {
 			loadErr = err
 			return
 		}
-		if err := json.Unmarshal(data, &snapshot); err != nil {
+		var initial Snapshot
+		if err := json.Unmarshal(data, &initial); err != nil {
 			loadErr = err
 			return
 		}
-		if snapshot.SourceCommit == "" || len(snapshot.Providers) == 0 {
+		if initial.SourceCommit == "" || len(initial.Providers) == 0 {
 			loadErr = errors.New("empty provider catalog")
+			return
 		}
+		snapshot.Store(&initial)
 	})
-	return snapshot, loadErr
+	if loadErr != nil {
+		return Snapshot{}, loadErr
+	}
+	return *snapshot.Load(), nil
 }
 
 func ListProviders() ([]Provider, string, error) {
@@ -139,4 +147,101 @@ func Search(provider, protocol, country, query string, offset, limit int) (Page,
 		result.Total++
 	}
 	return result, nil
+}
+
+type Location struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+type Locations struct {
+	SourceCommit string     `json:"source_commit"`
+	Countries    []Location `json:"countries"`
+	Cities       []Location `json:"cities"`
+}
+
+func ListLocations(provider, protocol, country string) (Locations, error) {
+	data, err := Load()
+	if err != nil {
+		return Locations{}, err
+	}
+	servers, ok := data.Providers[provider]
+	if !ok {
+		return Locations{}, errors.New("unknown VPN provider")
+	}
+	if protocol != "openvpn" && protocol != "wireguard" {
+		return Locations{}, errors.New("protocol must be openvpn or wireguard")
+	}
+	result := Locations{SourceCommit: data.SourceCommit, Countries: []Location{}, Cities: []Location{}}
+	countries, cities := map[string]int{}, map[string]int{}
+	for _, server := range servers {
+		if server.Protocol != protocol {
+			continue
+		}
+		if server.Country != "" {
+			countries[server.Country]++
+		}
+		if country == "" || strings.EqualFold(server.Country, country) {
+			if server.City != "" {
+				cities[server.City]++
+			}
+		}
+	}
+	for name, count := range countries {
+		result.Countries = append(result.Countries, Location{name, count})
+	}
+	for name, count := range cities {
+		result.Cities = append(result.Cities, Location{name, count})
+	}
+	sort.Slice(result.Countries, func(i, j int) bool { return result.Countries[i].Name < result.Countries[j].Name })
+	sort.Slice(result.Cities, func(i, j int) bool { return result.Cities[i].Name < result.Cities[j].Name })
+	return result, nil
+}
+
+func Select(provider, protocol, country, city, seed string, transport ...string) (Server, error) {
+	data, err := Load()
+	if err != nil {
+		return Server{}, err
+	}
+	servers, ok := data.Providers[provider]
+	if !ok {
+		return Server{}, errors.New("unknown VPN provider")
+	}
+	if protocol != "openvpn" && protocol != "wireguard" {
+		return Server{}, errors.New("protocol must be openvpn or wireguard")
+	}
+	if country == "" {
+		return Server{}, errors.New("select a VPN country")
+	}
+	var candidates []Server
+	for _, server := range servers {
+		if server.Protocol != protocol || !strings.EqualFold(server.Country, country) {
+			continue
+		}
+		if city != "" && !strings.EqualFold(server.City, city) {
+			continue
+		}
+		if protocol == "wireguard" && server.PublicKey == "" {
+			continue
+		}
+		if len(transport) > 0 && transport[0] == "udp" && !server.UDP {
+			continue
+		}
+		if len(transport) > 0 && transport[0] == "tcp" && !server.TCP {
+			continue
+		}
+		if _, err := netip.ParseAddr(server.IP); err != nil {
+			continue
+		}
+		candidates = append(candidates, server)
+	}
+	if len(candidates) == 0 {
+		return Server{}, errors.New("no compatible VPN server for provider and location")
+	}
+	// A stable choice avoids changing the endpoint between validation and start.
+	var hash uint32 = 2166136261
+	for _, b := range []byte(seed) {
+		hash = (hash ^ uint32(b)) * 16777619
+	}
+	return candidates[int(hash%uint32(len(candidates)))], nil
 }

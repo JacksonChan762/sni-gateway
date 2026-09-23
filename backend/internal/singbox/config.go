@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"sni-gateway/internal/catalog"
 	"sni-gateway/internal/models"
 )
 
@@ -20,7 +21,7 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 		return nil, fmt.Errorf("invalid exit configuration: %w", err)
 	}
 	if exit.Protocol == "openvpn" {
-		return buildOpenVPNConfig(raw)
+		return buildOpenVPNConfig(exit, raw)
 	}
 	if exit.Protocol != "wireguard" {
 		return nil, errors.New("protocol must be wireguard or openvpn")
@@ -28,6 +29,13 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 	field := func(name string) string { value, _ := raw[name].(string); return strings.TrimSpace(value) }
 	privateKey, publicKey := field("wireguard_private_key"), field("wireguard_public_key")
 	endpoint, portText := field("wireguard_endpoint_ip"), field("wireguard_endpoint_port")
+	if autoServerEnabled(raw) {
+		server, err := catalog.Select(exit.Provider, "wireguard", exit.Country, exit.City, exit.Name)
+		if err != nil {
+			return nil, err
+		}
+		endpoint, publicKey = server.IP, server.PublicKey
+	}
 	if _, err := netip.ParseAddr(endpoint); err != nil {
 		return nil, errors.New("WireGuard endpoint IP is required")
 	}
@@ -96,11 +104,26 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 	return json.Marshal(config)
 }
 
-func buildOpenVPNConfig(raw map[string]any) ([]byte, error) {
+func buildOpenVPNConfig(exit models.Exit, raw map[string]any) ([]byte, error) {
 	field := func(name string) string { value, _ := raw[name].(string); return strings.TrimSpace(value) }
 	endpoint, hasHostname, err := parseOpenVPNProfile(field("openvpn_profile"), field("openvpn_user"), field("openvpn_password"))
 	if err != nil {
 		return nil, err
+	}
+	if autoServerEnabled(raw) {
+		remotes := endpoint["servers"].([]map[string]any)
+		remote := remotes[0]
+		network, _ := remote["network"].(string)
+		if network == "" {
+			network, _ = endpoint["network"].(string)
+		}
+		server, err := catalog.Select(exit.Provider, "openvpn", exit.Country, exit.City, exit.Name, network)
+		if err != nil {
+			return nil, err
+		}
+		remote["server"] = server.IP
+		endpoint["servers"] = []map[string]any{remote}
+		hasHostname = false
 	}
 	dns := map[string]any{"type": "udp", "tag": "vpn-dns", "server": "1.1.1.1", "detour": "vpn"}
 	servers := []any{dns}
@@ -116,6 +139,16 @@ func buildOpenVPNConfig(raw map[string]any) ([]byte, error) {
 		"route":     map[string]any{"final": "vpn", "default_domain_resolver": "vpn-dns"},
 	}
 	return json.Marshal(config)
+}
+
+func autoServerEnabled(raw map[string]any) bool {
+	switch value := raw["auto_server"].(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	}
+	return false
 }
 
 func prefixes(value string) ([]string, error) {
