@@ -4,7 +4,7 @@ import {
   getExits, createExit, updateExit, deleteExit,
   startExit, stopExit, stopAllExits, restartExit, getExitLogs, getExitConfig, getExitStatus, getApiError,
 } from '../api/client'
-import { type Exit } from '../api/client'
+import { type Exit, type VPNServer } from '../api/client'
 import {
   Plus, Play, Square, RotateCcw, Trash2, Terminal,
   Globe, X, Pencil, Wifi, Shield, Copy, Activity,
@@ -12,6 +12,7 @@ import {
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/ConfirmModal'
 import PublishStatusNotice from '../components/PublishStatusNotice'
+import ProviderServerPicker from '../components/ProviderServerPicker'
 
 // ─── VPN config helpers ───────────────────────────────────────────────────────
 
@@ -212,6 +213,20 @@ function validateExitForm(
   return ''
 }
 
+function useOpenVPNServer(profile: string, ip: string) {
+  let replaced = false
+  const lines = profile.split('\n').filter(line => {
+    if (!/^\s*remote\s+/i.test(line)) return true
+    if (replaced) return false
+    replaced = true
+    return true
+  })
+  if (!replaced) return null
+  return lines.map(line => /^\s*remote\s+/i.test(line)
+    ? line.replace(/^(\s*remote\s+)\S+/i, (_match, prefix: string) => `${prefix}${ip}`)
+    : line).join('\n')
+}
+
 function normalizeEnvKey(key: string) {
   return key.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')
 }
@@ -272,7 +287,7 @@ export default function Exits() {
     onError: err => toast.error(getApiError(err)),
   })
   const updateMut = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { name: string; enabled: boolean; protocol?: string; config_yaml?: string; openvpn_profile?: string; openvpn_user?: string; openvpn_password?: string } }) =>
+    mutationFn: ({ id, data }: { id: number; data: { name: string; enabled: boolean; protocol?: string; provider?: string; country?: string; city?: string; config_yaml?: string; openvpn_profile?: string; openvpn_user?: string; openvpn_password?: string } }) =>
       updateExit(id, data),
     onSuccess: async (result, vars) => {
       qc.removeQueries({ queryKey: ['exit-config', vars.id] })
@@ -392,6 +407,7 @@ export default function Exits() {
       const config = await getExitConfig(exit.id)
       if (exit.protocol === 'openvpn') return createExit({
         name: uniqueCopyName(exit.name), runtime: 'sing-box', protocol: 'openvpn', enabled: false,
+        provider: exit.provider, country: exit.country, city: exit.city,
         openvpn_profile: config.openvpn_profile, openvpn_user: config.openvpn_user, openvpn_password: config.openvpn_password,
       })
       return createExit({
@@ -626,6 +642,9 @@ function ExitFormModal({
     openvpn_profile: '',
     openvpn_user: '',
     openvpn_password: '',
+    provider: exit?.provider ?? 'custom',
+    country: exit?.country ?? '',
+    city: exit?.city ?? '',
     environment_yaml: stringifyEnvYamlBlock({
       VPN_SERVICE_PROVIDER: 'custom', VPN_TYPE: 'wireguard',
       WIREGUARD_ENDPOINT_IP: '', WIREGUARD_ENDPOINT_PORT: '',
@@ -697,6 +716,7 @@ function ExitFormModal({
     if (!exit || !configData?.config_yaml) return
     if (configData.protocol === 'openvpn') {
       setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol: 'openvpn',
+        provider: exit.provider, country: exit.country, city: exit.city,
         openvpn_profile: configData.openvpn_profile ?? '', openvpn_user: configData.openvpn_user ?? '', openvpn_password: configData.openvpn_password ?? '' }))
       setLocalError('')
       return
@@ -714,6 +734,7 @@ function ExitFormModal({
     setLocalError('')
     if (form.protocol === 'openvpn') {
       onSubmit({ name: form.name, enabled: form.enabled, runtime: 'sing-box', protocol: 'openvpn',
+        provider: form.provider, country: form.country, city: form.city,
         openvpn_profile: form.openvpn_profile, openvpn_user: form.openvpn_user, openvpn_password: form.openvpn_password })
       return
     }
@@ -721,6 +742,28 @@ function ExitFormModal({
   }
 
   const displayError = localError || error
+
+  const selectServer = (provider: string, server: VPNServer) => {
+    if (form.protocol === 'openvpn') {
+      const profile = useOpenVPNServer(form.openvpn_profile, server.ip)
+      if (!profile) {
+        setLocalError('Import a complete .ovpn profile with a remote line before selecting a server')
+        return false
+      }
+      setForm(f => ({ ...f, openvpn_profile: profile, provider, country: server.country, city: server.city }))
+    } else {
+      if (!server.public_key) { setLocalError('This server has no WireGuard public key'); return false }
+      const next = parseEnvYamlBlock(form.environment_yaml)
+      next.VPN_SERVICE_PROVIDER = provider
+      next.SERVER_COUNTRIES = server.country
+      next.SERVER_CITIES = server.city
+      next.WIREGUARD_ENDPOINT_IP = server.ip
+      next.WIREGUARD_PUBLIC_KEY = server.public_key
+      setForm(f => ({ ...f, environment_yaml: stringifyEnvYamlBlock(next, 'wireguard') }))
+    }
+    setLocalError('')
+    return true
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
@@ -795,6 +838,7 @@ function ExitFormModal({
           </div>
 
           {/* Environment fields */}
+          <ProviderServerPicker protocol={form.protocol} onSelect={selectServer} />
           {form.protocol === 'openvpn' ? <div className="space-y-3">
             <div>
               <label className="label">OpenVPN profile *</label>

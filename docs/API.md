@@ -10,6 +10,10 @@ curl -sS -X POST http://127.0.0.1:8080/api/auth/login \
 
 Use the returned `token` in the requests below. The installer stores the generated admin password in `.env`. Never commit real credentials or VPN configuration files.
 
+## Provider server catalog
+
+Authenticated `GET /api/providers` lists the 23 providers in the bundled [Gluetun servers snapshot](https://github.com/qdm12/gluetun-servers), protocol counts, countries, and the pinned source commit. `GET /api/providers/servers` accepts `provider`, `protocol` (`openvpn` or `wireguard`), optional `country` and `query`, and `offset`/`limit` (at most 100). The response contains `total`, `servers`, and `source_commit`. Server records include IP, hostname, location, supported transports, and WireGuard server public key where available. Client credentials, WireGuard interface keys/addresses, and OpenVPN certificates are not present. A server selected in the UI updates the exit config; it is not a live provider subscription.
+
 ## Exits
 
 `POST /api/exits` accepts a complete WireGuard or OpenVPN connection. `runtime` defaults to `sing-box`; `protocol` is `wireguard` or `openvpn`. For WireGuard, the private key and peer public key must be base64-encoded 32-byte keys, and the endpoint must be an IP address.

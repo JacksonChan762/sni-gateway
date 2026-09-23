@@ -53,6 +53,27 @@ export interface Exit {
   updated_at: string
 }
 
+export interface VPNProvider {
+  name: string
+  openvpn: number
+  wireguard: number
+  countries: string[]
+}
+
+export interface VPNServer {
+  id: number
+  protocol: 'openvpn' | 'wireguard'
+  country: string
+  region: string
+  city: string
+  name: string
+  hostname: string
+  ip: string
+  public_key?: string
+  udp: boolean
+  tcp: boolean
+}
+
 export interface Rule {
   id: number
   pattern: string
@@ -106,6 +127,11 @@ export const getPublishStatus = () => api.get<{ pending: boolean }>('/publish/st
 // ─── Exits ───────────────────────────────────────────────────────────────────
 
 export const getExits = () => api.get<Exit[]>('/exits').then(r => r.data)
+export const getVPNProviders = () => api.get<{ providers: VPNProvider[]; source_commit: string }>('/providers').then(r => r.data)
+export const searchVPNServers = (provider: string, protocol: string, country: string, query: string, offset: number) => {
+  const params = new URLSearchParams({ provider, protocol, country, query, offset: String(offset), limit: '50' })
+  return api.get<{ source_commit: string; total: number; servers: VPNServer[] }>(`/providers/servers?${params}`).then(r => r.data)
+}
 export const createExit = (data: Partial<Exit> & { config_yaml?: string; wireguard_private_key?: string; wireguard_addresses?: string; wireguard_dns?: string; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>
   api.post<Exit>('/exits', data).then(r => r.data)
 export const updateExit = (id: number, data: Partial<Exit> & { config_yaml?: string; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>

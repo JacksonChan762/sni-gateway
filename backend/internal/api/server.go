@@ -83,6 +83,8 @@ func (s *Server) registerRoutes() {
 	api.Post("/subscriptions/:id/sync", s.subs.Sync)
 
 	// Exits
+	api.Get("/providers", listVPNProviders)
+	api.Get("/providers/servers", searchVPNServers)
 	api.Get("/exits", s.exits.List)
 	api.Post("/exits", s.exits.Create)
 	api.Post("/exits/stop-all", s.exits.StopAll)
