@@ -196,9 +196,11 @@ function parseWireguardEndpoint(value: string) {
 function validateExitForm(
   name: string,
   protocol: 'wireguard' | 'openvpn',
-  environmentYaml: string
+  environmentYaml: string,
+  openvpnProfile: string
 ) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(name.trim())) return 'Use 1–63 letters, numbers, hyphens, or underscores for the name'
+  if (protocol === 'openvpn') return openvpnProfile.trim() ? '' : 'Import or paste a complete .ovpn profile'
   const env = parseEnvYamlBlock(environmentYaml)
   if (protocol === 'wireguard') {
     if (!env.WIREGUARD_ENDPOINT_IP) return 'WIREGUARD_ENDPOINT_IP is required for custom WireGuard exits'
@@ -207,7 +209,6 @@ function validateExitForm(
     if (!env.WIREGUARD_PRIVATE_KEY) return 'WIREGUARD_PRIVATE_KEY is required for custom WireGuard exits'
     if (!env.WIREGUARD_ADDRESSES) return 'WIREGUARD_ADDRESSES is required for custom WireGuard exits'
   }
-  if (protocol === 'openvpn') return 'Import a complete WireGuard configuration to use sing-box'
   return ''
 }
 
@@ -266,7 +267,7 @@ export default function Exits() {
     onError: err => toast.error(getApiError(err)),
   })
   const updateMut = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { name: string; config_yaml: string; enabled: boolean } }) =>
+    mutationFn: ({ id, data }: { id: number; data: { name: string; enabled: boolean; protocol?: string; config_yaml?: string; openvpn_profile?: string; openvpn_user?: string; openvpn_password?: string } }) =>
       updateExit(id, data),
     onSuccess: async (_, vars) => {
       qc.removeQueries({ queryKey: ['exit-config', vars.id] })
@@ -375,6 +376,10 @@ export default function Exits() {
   const copyMut = useMutation({
     mutationFn: async (exit: Exit) => {
       const config = await getExitConfig(exit.id)
+      if (exit.protocol === 'openvpn') return createExit({
+        name: uniqueCopyName(exit.name), runtime: 'sing-box', protocol: 'openvpn', enabled: false,
+        openvpn_profile: config.openvpn_profile, openvpn_user: config.openvpn_user, openvpn_password: config.openvpn_password,
+      })
       return createExit({
         name: uniqueCopyName(exit.name),
         enabled: false,
@@ -392,7 +397,7 @@ export default function Exits() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Exits</h1>
-          <p className="page-subtitle">Manage sing-box WireGuard VPN exits</p>
+          <p className="page-subtitle">Manage sing-box WireGuard and OpenVPN exits</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" disabled={runtimeBusy || exits.length === 0} onClick={handleStopAll}>
@@ -523,7 +528,7 @@ function ExitCard({
             <div className="flex items-center gap-2 mb-1">
               <span className="font-semibold text-white">{exit.name}</span>
               <StatusBadge status={exit.status} />
-              {exit.runtime !== 'sing-box' && <span className="badge-yellow">Needs WireGuard config</span>}
+              {exit.runtime !== 'sing-box' && <span className="badge-yellow">Needs VPN config</span>}
               {!exit.enabled && <span className="badge-gray">Disabled</span>}
             </div>
             <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
@@ -604,6 +609,9 @@ function ExitFormModal({
     name: exit?.name ?? '',
     enabled: exit?.enabled ?? true,
     protocol: 'wireguard' as 'wireguard' | 'openvpn',
+    openvpn_profile: '',
+    openvpn_user: '',
+    openvpn_password: '',
     environment_yaml: stringifyEnvYamlBlock({
       VPN_SERVICE_PROVIDER: 'custom', VPN_TYPE: 'wireguard',
       WIREGUARD_ENDPOINT_IP: '', WIREGUARD_ENDPOINT_PORT: '',
@@ -654,6 +662,12 @@ function ExitFormModal({
     const file = event.target.files?.[0]
     if (!file) return
     const content = await file.text()
+    if (file.name.toLowerCase().endsWith('.ovpn') || /^\s*(client|remote|proto)\s/m.test(content)) {
+      setForm(f => ({ ...f, protocol: 'openvpn', openvpn_profile: content }))
+      setLocalError('')
+      event.target.value = ''
+      return
+    }
     const importedEnv = /\[(interface|peer)]/i.test(content)
       ? parseWireguardConfig(content)
       : parseEnvYamlBlock(content)
@@ -667,17 +681,28 @@ function ExitFormModal({
 
   useEffect(() => {
     if (!exit || !configData?.config_yaml) return
+    if (configData.protocol === 'openvpn') {
+      setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol: 'openvpn',
+        openvpn_profile: configData.openvpn_profile ?? '', openvpn_user: configData.openvpn_user ?? '', openvpn_password: configData.openvpn_password ?? '' }))
+      setLocalError('')
+      return
+    }
     const environmentYaml = extractEnvironmentBlock(configData.config_yaml)
     const env = parseEnvYamlBlock(environmentYaml)
     const protocol = env.VPN_TYPE === 'openvpn' ? 'openvpn' : 'wireguard'
-    setForm({ name: exit.name, enabled: exit.enabled, protocol, environment_yaml: stringifyEnvYamlBlock(env, protocol) })
+    setForm(f => ({ ...f, name: exit.name, enabled: exit.enabled, protocol, environment_yaml: stringifyEnvYamlBlock(env, protocol) }))
     setLocalError('')
   }, [configData, exit])
 
   const handleSubmit = () => {
-    const err = validateExitForm(form.name, form.protocol, form.environment_yaml)
+    const err = validateExitForm(form.name, form.protocol, form.environment_yaml, form.openvpn_profile)
     if (err) { setLocalError(err); return }
     setLocalError('')
+    if (form.protocol === 'openvpn') {
+      onSubmit({ name: form.name, enabled: form.enabled, runtime: 'sing-box', protocol: 'openvpn',
+        openvpn_profile: form.openvpn_profile, openvpn_user: form.openvpn_user, openvpn_password: form.openvpn_password })
+      return
+    }
     onSubmit({ name: form.name, enabled: form.enabled, runtime: 'sing-box', config_yaml: buildComposeYaml(form.enabled, form.environment_yaml) })
   }
 
@@ -736,6 +761,10 @@ function ExitFormModal({
               >
                 <Wifi size={14} /> WireGuard
               </button>
+              <button type="button" className={form.protocol === 'openvpn' ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setForm(f => ({ ...f, protocol: 'openvpn' }))}>
+                <Shield size={14} /> OpenVPN
+              </button>
             </div>
           </div>
 
@@ -745,13 +774,26 @@ function ExitFormModal({
             <input
               className="input text-xs"
               type="file"
-              accept=".env,.txt,.conf,.ini,.wg"
+              accept=".env,.txt,.conf,.ini,.wg,.ovpn"
               onChange={handleImportFile}
             />
-            <p className="text-xs text-gray-600 mt-1">Supports KEY=VALUE and WireGuard wg0.conf files</p>
+            <p className="text-xs text-gray-600 mt-1">Supports WireGuard .conf and inline OpenVPN .ovpn profiles</p>
           </div>
 
           {/* Environment fields */}
+          {form.protocol === 'openvpn' ? <div className="space-y-3">
+            <div>
+              <label className="label">OpenVPN profile *</label>
+              <textarea className="input font-mono text-xs min-h-[180px]" value={form.openvpn_profile}
+                placeholder={'client\ndev tun\nremote 203.0.113.10 1194\n<ca>\n...\n</ca>'}
+                onChange={e => setForm(f => ({ ...f, openvpn_profile: e.target.value }))} />
+              <p className="text-xs text-gray-600 mt-1">Embed CA, client certificate, and keys in the profile. External file paths are not supported.</p>
+            </div>
+            <div><label className="label">Username (if required)</label><input className="input" value={form.openvpn_user}
+              onChange={e => setForm(f => ({ ...f, openvpn_user: e.target.value }))} /></div>
+            <div><label className="label">Password (if required)</label><input className="input" type="password" value={form.openvpn_password}
+              onChange={e => setForm(f => ({ ...f, openvpn_password: e.target.value }))} /></div>
+          </div> : <>
           <div>
             <label className="label">WireGuard connection</label>
             <div className="space-y-3 bg-gray-800/40 rounded-xl p-4 border border-gray-700/50">
@@ -809,9 +851,10 @@ function ExitFormModal({
               Import a WireGuard .conf file, or enter its endpoint, keys, and interface address. Provider name and region alone are insufficient.
             </p>
           </div>
+          </>}
 
           {/* Configuration preview toggle */}
-          <div>
+          {form.protocol === 'wireguard' && <div>
             <button
               type="button"
               className="btn-ghost text-xs"
@@ -824,7 +867,7 @@ function ExitFormModal({
                 {buildComposeYaml(form.enabled, form.environment_yaml)}
               </pre>
             )}
-          </div>
+          </div>}
 
           {displayError && (
             <div className="text-red-400 text-sm bg-red-950/40 border border-red-800/50 px-3 py-2.5 rounded-xl">

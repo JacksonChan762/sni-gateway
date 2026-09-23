@@ -8,11 +8,11 @@ curl -sS -X POST http://127.0.0.1:8080/api/auth/login \
   -d '{"username":"admin","password":"YOUR_ADMIN_PASSWORD"}'
 ```
 
-Use the returned `token` in the requests below. The installer stores the generated admin password in `.env`. Never commit real credentials or WireGuard configuration files.
+Use the returned `token` in the requests below. The installer stores the generated admin password in `.env`. Never commit real credentials or VPN configuration files.
 
 ## Exits
 
-`POST /api/exits` accepts a complete WireGuard connection. `runtime` defaults to `sing-box`; `protocol` must be `wireguard`. The private key and peer public key must be base64-encoded 32-byte keys, and the endpoint must be an IP address.
+`POST /api/exits` accepts a complete WireGuard or OpenVPN connection. `runtime` defaults to `sing-box`; `protocol` is `wireguard` or `openvpn`. For WireGuard, the private key and peer public key must be base64-encoded 32-byte keys, and the endpoint must be an IP address.
 
 ```json
 {
@@ -31,9 +31,22 @@ Use the returned `token` in the requests below. The installer stores the generat
 }
 ```
 
-`wireguard_preshared_key` is optional. The peer must allow `0.0.0.0/0` because the gateway forwards arbitrary matched domains; there is no direct fallback. DNS queries for destination domains use the selected VPN exit. A provider name, country, private key, and address without the peer endpoint/public key are insufficient. OpenVPN credentials alone cannot be used in this runtime.
+`wireguard_preshared_key` is optional. The peer must allow `0.0.0.0/0` because the gateway forwards arbitrary matched domains; there is no direct fallback. DNS queries for destination domains use the selected VPN exit. A provider name, country, private key, and address without the peer endpoint/public key are insufficient. OpenVPN credentials alone are also insufficient; a complete `.ovpn` profile is required.
 
-A `config_yaml` import/export format is also accepted. It contains a `services.singbox.environment` list of `WIREGUARD_*` variables, as used by the UI. This is an application format, not a standalone Compose deployment.
+For OpenVPN, submit the `.ovpn` text in `openvpn_profile`. The profile needs a `remote` server and inline `<ca>` certificate. Include inline `<cert>` and `<key>` together when client certificate authentication is required. Set `openvpn_user` and `openvpn_password` together when the provider requires username/password authentication. External file references and unsupported directives return validation errors. Example:
+
+```json
+{
+  "name": "office-vpn",
+  "protocol": "openvpn",
+  "openvpn_profile": "client\nproto udp\nremote vpn.example.com 1194\nremote-cert-tls server\n<ca>\n-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n</ca>\n",
+  "openvpn_user": "YOUR_USERNAME",
+  "openvpn_password": "YOUR_PASSWORD",
+  "enabled": true
+}
+```
+
+The `config_yaml` import/export format is also accepted. WireGuard uses a `services.singbox.environment` list of `WIREGUARD_*` variables. OpenVPN export uses top-level `openvpn_profile`, `openvpn_user`, and `openvpn_password` fields. This is an application format, not a standalone Compose deployment. The config endpoint returns secrets and should be handled accordingly.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -50,7 +63,7 @@ A `config_yaml` import/export format is also accepted. It contains a `services.s
 | `GET /api/exits/:id/logs` | Return sing-box logs |
 | `GET /api/exits/:id/config` | Return configuration including secrets; handle carefully |
 
-Older Gluetun exits remain in the database during migration. Edit one with a complete WireGuard configuration to convert it to sing-box. The API rejects attempts to start a legacy exit before conversion.
+Older Gluetun exits remain in the database during migration. Edit one with a complete WireGuard or OpenVPN configuration to convert it to sing-box. The API rejects attempts to start a legacy exit before conversion.
 
 ## Rules and subscriptions
 

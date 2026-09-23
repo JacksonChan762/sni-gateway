@@ -86,12 +86,38 @@ func TestValidateExitRequestAcceptsCustomWireguardFields(t *testing.T) {
 	}
 }
 
-func TestValidateExitRequestRejectsProviderOnlyAndOpenVPN(t *testing.T) {
+func TestValidateExitRequestRejectsIncompleteVPNConfig(t *testing.T) {
 	if err := validateExitRequest(CreateExitRequest{Protocol: "wireguard", Provider: "protonvpn", WireguardPrivKey: "key"}); err == nil || !strings.Contains(err.Error(), "wireguard_endpoint_ip") {
 		t.Fatalf("provider-only exit accepted: %v", err)
 	}
-	if err := validateExitRequest(CreateExitRequest{Protocol: "openvpn", OpenVPNUser: "user", OpenVPNPassword: "pass"}); err == nil || !strings.Contains(err.Error(), "WireGuard") {
+	if err := validateExitRequest(CreateExitRequest{Protocol: "openvpn", OpenVPNUser: "user", OpenVPNPassword: "pass"}); err == nil || !strings.Contains(err.Error(), "OpenVPN profile") {
 		t.Fatalf("OpenVPN credentials accepted: %v", err)
+	}
+}
+
+func TestOpenVPNExitConfigRoundTrip(t *testing.T) {
+	profile := "client\nremote 203.0.113.10 1194\n<ca>\nTEST CA\n</ca>\n"
+	req := CreateExitRequest{Protocol: "openvpn", OpenVPNProfile: profile, OpenVPNUser: "alice", OpenVPNPassword: "secret"}
+	if err := validateExitRequest(req); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := buildExitConfigJSON(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := models.Exit{Protocol: "openvpn", ConfigJSON: raw}
+	if err := normalizeExitConfig(&exit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := singbox.BuildExitConfig(exit); err != nil {
+		t.Fatal(err)
+	}
+	if parsed := parseExitCredentials(exit.ConfigJSON); parsed["openvpn_profile"] != strings.TrimSpace(profile) || parsed["openvpn_password"] != "secret" {
+		t.Fatal("OpenVPN profile or password lost during normalization")
+	}
+	yamlText, err := buildExitConfigYAML(&exit)
+	if err != nil || !strings.Contains(yamlText, "openvpn_profile:") || !strings.Contains(yamlText, "remote 203.0.113.10") {
+		t.Fatalf("OpenVPN YAML export failed: %v", err)
 	}
 }
 

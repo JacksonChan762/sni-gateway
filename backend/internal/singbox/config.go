@@ -15,12 +15,15 @@ import (
 // BuildExitConfig creates an isolated SOCKS ingress whose only route is the VPN.
 // Legacy provider/region credentials cannot identify a WireGuard peer.
 func BuildExitConfig(exit models.Exit) ([]byte, error) {
-	if exit.Protocol != "wireguard" {
-		return nil, errors.New("sing-box exits currently require a complete WireGuard configuration")
-	}
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(exit.ConfigJSON), &raw); err != nil {
 		return nil, fmt.Errorf("invalid exit configuration: %w", err)
+	}
+	if exit.Protocol == "openvpn" {
+		return buildOpenVPNConfig(raw)
+	}
+	if exit.Protocol != "wireguard" {
+		return nil, errors.New("protocol must be wireguard or openvpn")
 	}
 	field := func(name string) string { value, _ := raw[name].(string); return strings.TrimSpace(value) }
 	privateKey, publicKey := field("wireguard_private_key"), field("wireguard_public_key")
@@ -88,6 +91,28 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 		"inbounds":  []any{map[string]any{"type": "socks", "tag": "ingress", "listen": "0.0.0.0", "listen_port": 1080}},
 		"endpoints": []any{map[string]any{"type": "wireguard", "tag": "vpn", "address": addresses, "private_key": privateKey, "peers": []any{peer}}},
 		"dns":       dnsConfig,
+		"route":     map[string]any{"final": "vpn", "default_domain_resolver": "vpn-dns"},
+	}
+	return json.Marshal(config)
+}
+
+func buildOpenVPNConfig(raw map[string]any) ([]byte, error) {
+	field := func(name string) string { value, _ := raw[name].(string); return strings.TrimSpace(value) }
+	endpoint, hasHostname, err := parseOpenVPNProfile(field("openvpn_profile"), field("openvpn_user"), field("openvpn_password"))
+	if err != nil {
+		return nil, err
+	}
+	dns := map[string]any{"type": "udp", "tag": "vpn-dns", "server": "1.1.1.1", "detour": "vpn"}
+	servers := []any{dns}
+	if hasHostname {
+		servers = append(servers, map[string]any{"type": "local", "tag": "bootstrap"})
+		endpoint["domain_resolver"] = "bootstrap"
+	}
+	config := map[string]any{
+		"log":       map[string]any{"level": "info"},
+		"inbounds":  []any{map[string]any{"type": "socks", "tag": "ingress", "listen": "0.0.0.0", "listen_port": 1080}},
+		"endpoints": []any{endpoint},
+		"dns":       map[string]any{"servers": servers, "final": "vpn-dns"},
 		"route":     map[string]any{"final": "vpn", "default_domain_resolver": "vpn-dns"},
 	}
 	return json.Marshal(config)

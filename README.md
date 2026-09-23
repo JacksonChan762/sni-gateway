@@ -2,7 +2,7 @@
 
 [繁體中文](README.zh-TW.md)
 
-This development branch replaces the Nginx edge and Gluetun/relay VPN exits with a Go SNI ingress and one sing-box container per WireGuard exit. The admin UI and API remain on `127.0.0.1:8080` by default. Ports 80 and 443 are served by the backend. Port 80 redirects matched hosts to HTTPS; port 443 passes the original TLS connection through the selected VPN without terminating TLS. Unmatched SNI names are closed.
+This development branch replaces the Nginx edge and Gluetun/relay VPN exits with a Go SNI ingress and one sing-box container per WireGuard or OpenVPN exit. The admin UI and API remain on `127.0.0.1:8080` by default. Ports 80 and 443 are served by the backend. Port 80 redirects matched hosts to HTTPS; port 443 passes the original TLS connection through the selected VPN without terminating TLS. Unmatched SNI names are closed.
 
 This is a migration branch, not the v1.1 stable release. The existing [v1.1 release notes](docs/releases/v1.1.md) describe the stable Nginx/Gluetun deployment.
 
@@ -10,9 +10,9 @@ This is a migration branch, not the v1.1 stable release. The existing [v1.1 rele
 
 - Docker and Docker Compose v2
 - Free host ports 80 and 443
-- A **complete WireGuard client configuration** for each exit: interface private key and address, peer endpoint IP and port, peer public key, and optionally preshared key, DNS, and allowed IPs
+- A **complete VPN client configuration** for each exit: WireGuard interface/peer details, or a portable OpenVPN `.ovpn` profile with inline CA and any client certificate/key. Enter OpenVPN username and password separately when required.
 
-Provider username/password and country selection alone cannot identify a WireGuard server and cannot be migrated automatically. OpenVPN exits are not yet supported by the sing-box runtime in this branch. These exits remain in the database, but need a full WireGuard configuration before they can start or be published.
+Provider username/password and country selection alone cannot identify a VPN server and cannot be migrated automatically. Existing exits remain in the database; import a complete WireGuard or OpenVPN configuration before starting or publishing them. OpenVPN profiles that refer to external certificate/key files must be converted to inline `<ca>`, `<cert>`, `<key>`, and TLS key blocks. Unsupported directives are reported during import.
 
 ## Install
 
@@ -26,14 +26,14 @@ For an existing checkout, back up the database before switching branches. The up
 
 ## Use
 
-1. Open **Exits** and create an exit. Import a provider WireGuard `.conf` file, or enter the connection fields manually. The interface address must use CIDR notation, such as `10.2.0.2/32`; the endpoint must be an IP address. Choose **Check status** to verify the public IP through the VPN.
-2. Add exact or suffix domain rules and select an exit. A rule targeting a legacy exit cannot be published until that exit is edited with a complete WireGuard configuration.
+1. Open **Exits** and create an exit. Import a provider WireGuard `.conf` or OpenVPN `.ovpn` file, or enter WireGuard connection fields manually. For WireGuard, the interface address must use CIDR notation, such as `10.2.0.2/32`, and the endpoint must be an IP address. For OpenVPN, the `.ovpn` file must contain an inline CA certificate; enter separate credentials if the provider requires them. Choose **Check status** to verify the public IP through the VPN.
+2. Add exact or suffix domain rules and select an exit. A rule targeting a legacy exit cannot be published until that exit is edited with a complete WireGuard or OpenVPN configuration.
 3. Open **Publish**, validate and publish the saved rules. New connections use the published table immediately. Rollback restores the previous published table. Subscription syncs can also publish updates.
 4. Point the domain to the gateway host and test a TLS connection. DNS resolution for the destination occurs inside the selected sing-box exit. No direct-route fallback is configured.
 
-The `services.singbox.environment` YAML shown in the exit editor is an import/export format for this application. It is not a standalone Docker Compose file. Each dynamic sing-box container listens on SOCKS port 1080 inside the private `vpn-net` Docker network; it is not published on the host.
+The WireGuard `services.singbox.environment` YAML and OpenVPN YAML export are application import/export formats, not standalone Docker Compose files. Each dynamic sing-box container listens on SOCKS port 1080 inside the private `vpn-net` Docker network; it is not published on the host.
 
-See the [API reference](docs/API.md) for endpoint details and a WireGuard request example.
+See the [API reference](docs/API.md) for endpoint details and WireGuard/OpenVPN request examples. OpenVPN server hostnames use local DNS only to bootstrap the tunnel; destination lookups use VPN DNS.
 
 ## Operations
 

@@ -106,9 +106,9 @@ export const getPublishStatus = () => api.get<{ pending: boolean }>('/publish/st
 // ─── Exits ───────────────────────────────────────────────────────────────────
 
 export const getExits = () => api.get<Exit[]>('/exits').then(r => r.data)
-export const createExit = (data: Partial<Exit> & { config_yaml?: string; wireguard_private_key?: string; wireguard_addresses?: string; wireguard_dns?: string; openvpn_user?: string; openvpn_password?: string }) =>
+export const createExit = (data: Partial<Exit> & { config_yaml?: string; wireguard_private_key?: string; wireguard_addresses?: string; wireguard_dns?: string; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>
   api.post<Exit>('/exits', data).then(r => r.data)
-export const updateExit = (id: number, data: Partial<Exit> & { config_yaml?: string }) =>
+export const updateExit = (id: number, data: Partial<Exit> & { config_yaml?: string; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>
   api.put<Exit>(`/exits/${id}`, data).then(r => r.data)
 export const deleteExit = (id: number) => api.delete(`/exits/${id}`).then(r => r.data)
 export const startExit = (id: number) => api.post(`/exits/${id}/start`).then(r => r.data)
@@ -116,7 +116,7 @@ export const stopExit = (id: number) => api.post(`/exits/${id}/stop`).then(r => 
 export const restartExit = (id: number) => api.post(`/exits/${id}/restart`).then(r => r.data)
 export const testExit = (id: number) => api.post(`/exits/${id}/test`).then(r => r.data)
 export const getExitConfig = (id: number) =>
-  api.get<{ config_yaml: string }>(`/exits/${id}/config`).then(r => r.data)
+  api.get<{ config_yaml: string; protocol: string; openvpn_profile: string; openvpn_user: string; openvpn_password: string }>(`/exits/${id}/config`).then(r => r.data)
 export const getExitLogs = (id: number, tail = 100) =>
   api.get<{ logs: string }>(`/exits/${id}/logs?tail=${tail}`).then(r => r.data)
 export const getExitStatus = (id: number) =>

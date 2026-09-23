@@ -54,6 +54,7 @@ type CreateExitRequest struct {
 	WireguardDNS          string `json:"wireguard_dns"`
 	OpenVPNUser           string `json:"openvpn_user"`
 	OpenVPNPassword       string `json:"openvpn_password"`
+	OpenVPNProfile        string `json:"openvpn_profile"`
 	ConfigYAML            string `json:"config_yaml"`
 	Enabled               *bool  `json:"enabled"`
 }
@@ -243,6 +244,9 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		if req.OpenVPNPassword != "" {
 			creds["openvpn_password"] = req.OpenVPNPassword
 		}
+		if req.OpenVPNProfile != "" {
+			creds["openvpn_profile"] = req.OpenVPNProfile
+		}
 		if len(creds) > 0 {
 			if raw, err := json.Marshal(creds); err == nil {
 				exit.ConfigJSON = string(raw)
@@ -283,7 +287,9 @@ func (h *ExitHandler) Config(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	return c.JSON(fiber.Map{"config_yaml": configYAML})
+	creds := parseExitCredentials(exit.ConfigJSON)
+	return c.JSON(fiber.Map{"config_yaml": configYAML, "protocol": exit.Protocol,
+		"openvpn_profile": creds["openvpn_profile"], "openvpn_user": creds["openvpn_user"], "openvpn_password": creds["openvpn_password"]})
 }
 
 func parseExitCredentials(raw string) map[string]string {
@@ -302,6 +308,7 @@ func parseExitCredentials(raw string) map[string]string {
 		{"WIREGUARD_PRESHARED_KEY", "wireguard_preshared_key"}, {"WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"},
 		{"WIREGUARD_ADDRESSES", "wireguard_addresses"}, {"WIREGUARD_DNS", "wireguard_dns"},
 		{"OPENVPN_USER", "openvpn_user"}, {"OPENVPN_PASSWORD", "openvpn_password"},
+		{"OPENVPN_PROFILE", "openvpn_profile"},
 	} {
 		if value := firstConfigValue(env, data, pair[0], pair[1]); value != "" {
 			result[pair[1]] = value
@@ -361,7 +368,15 @@ func validateExitRequest(req CreateExitRequest) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("sing-box currently requires a complete WireGuard configuration; OpenVPN support is not available")
+	if req.Protocol == "openvpn" {
+		config, err := buildExitConfigJSON(req)
+		if err != nil {
+			return err
+		}
+		_, err = singbox.BuildExitConfig(models.Exit{Protocol: "openvpn", ConfigJSON: config})
+		return err
+	}
+	return fmt.Errorf("protocol must be wireguard or openvpn")
 }
 
 func validateWireguardDNS(value string) error {
@@ -411,6 +426,7 @@ func validateExitConfig(exit *models.Exit) error {
 		WireguardDNS:          firstConfigValue(env, raw, "WIREGUARD_DNS", "wireguard_dns"),
 		OpenVPNUser:           firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
 		OpenVPNPassword:       firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
+		OpenVPNProfile:        firstConfigValue(env, raw, "OPENVPN_PROFILE", "openvpn_profile"),
 	}
 	return validateExitRequest(req)
 }
@@ -423,6 +439,19 @@ func normalizeExitConfig(exit *models.Exit) error {
 		return err
 	}
 	env := extractStoredComposeEnv(raw)
+	if exit.Protocol == "openvpn" {
+		fields := map[string]string{
+			"openvpn_profile":  firstConfigValue(env, raw, "OPENVPN_PROFILE", "openvpn_profile"),
+			"openvpn_user":     firstConfigValue(env, raw, "OPENVPN_USER", "openvpn_user"),
+			"openvpn_password": firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
+		}
+		data, err := json.Marshal(fields)
+		if err != nil {
+			return err
+		}
+		exit.ConfigJSON = string(data)
+		return nil
+	}
 	fields := map[string]string{}
 	for _, pair := range [][2]string{
 		{"WIREGUARD_PRIVATE_KEY", "wireguard_private_key"},
@@ -518,6 +547,9 @@ func applyYAMLToExitRequest(req *CreateExitRequest) error {
 	if v := getString("openvpn_password"); v != "" {
 		req.OpenVPNPassword = v
 	}
+	if v := getString("openvpn_profile"); v != "" {
+		req.OpenVPNProfile = v
+	}
 	if enabled, ok := raw["enabled"].(bool); ok {
 		req.Enabled = &enabled
 	}
@@ -601,6 +633,9 @@ func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest)
 	if v := env["OPENVPN_PASSWORD"]; v != "" {
 		req.OpenVPNPassword = v
 	}
+	if v := env["OPENVPN_PROFILE"]; v != "" {
+		req.OpenVPNProfile = v
+	}
 
 	return true
 }
@@ -683,6 +718,9 @@ func buildExitConfigJSON(req CreateExitRequest) (string, error) {
 	if req.OpenVPNPassword != "" {
 		raw["openvpn_password"] = req.OpenVPNPassword
 	}
+	if req.OpenVPNProfile != "" {
+		raw["openvpn_profile"] = req.OpenVPNProfile
+	}
 
 	encoded, err := json.Marshal(raw)
 	if err != nil {
@@ -697,6 +735,14 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 		if err := json.Unmarshal([]byte(exit.ConfigJSON), &raw); err != nil {
 			return "", err
 		}
+	}
+	if exit.Protocol == "openvpn" {
+		creds := parseExitCredentials(exit.ConfigJSON)
+		encoded, err := yaml.Marshal(map[string]interface{}{
+			"runtime": "sing-box", "protocol": "openvpn", "enabled": exit.Enabled,
+			"openvpn_profile": creds["openvpn_profile"], "openvpn_user": creds["openvpn_user"], "openvpn_password": creds["openvpn_password"],
+		})
+		return string(encoded), err
 	}
 
 	envMap := extractStoredComposeEnv(raw)
