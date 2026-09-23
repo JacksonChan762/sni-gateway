@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/docker"
@@ -15,12 +16,36 @@ import (
 )
 
 type ExitManager struct {
-	operationMu sync.Mutex
+	operationMu sync.RWMutex
+	exitMu      sync.Mutex
+	exitLocks   map[uint]*sync.Mutex
 	docker      *docker.Client
 }
 
 func NewExitManager(dockerClient *docker.Client) *ExitManager {
-	return &ExitManager{docker: dockerClient}
+	return &ExitManager{docker: dockerClient, exitLocks: make(map[uint]*sync.Mutex)}
+}
+
+// lockExit allows independent exits to run concurrently while StopAll stays exclusive.
+func (em *ExitManager) lockExit(id uint) func() {
+	em.operationMu.RLock()
+	unlock := em.lockExitOnly(id)
+	return func() {
+		unlock()
+		em.operationMu.RUnlock()
+	}
+}
+
+func (em *ExitManager) lockExitOnly(id uint) func() {
+	em.exitMu.Lock()
+	lock := em.exitLocks[id]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		em.exitLocks[id] = lock
+	}
+	em.exitMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 func (em *ExitManager) ensureDockerAvailable() error {
@@ -31,11 +56,10 @@ func (em *ExitManager) ensureDockerAvailable() error {
 }
 
 func (em *ExitManager) ReconcileAfterUpdate(before, after *models.Exit) error {
-	em.operationMu.Lock()
-	defer em.operationMu.Unlock()
 	if before == nil || after == nil {
 		return nil
 	}
+	defer em.lockExit(after.ID)()
 
 	runtimeChanged := exitRuntimeConfigChanged(before, after)
 	if !runtimeChanged && before.Enabled == after.Enabled && (after.Enabled || before.Status == "stopped" || before.Status == "not_found") {
@@ -48,7 +72,8 @@ func (em *ExitManager) ReconcileAfterUpdate(before, after *models.Exit) error {
 		return err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 	em.logEvent(after.ID, "update", "started", "reconciling runtime")
 
 	if runtimeChanged || !after.Enabled {
@@ -94,7 +119,8 @@ func (em *ExitManager) createAndStart(exit *models.Exit) error {
 		return err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 	em.logEvent(exit.ID, "create", "started", "")
 
 	gluetunCfg := docker.GluetunConfig{
@@ -164,7 +190,8 @@ func (em *ExitManager) start(exit *models.Exit) error {
 		return err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	em.logEvent(exit.ID, "start", "started", "")
 
 	gluetunName := "gluetun-" + exit.Name
@@ -237,8 +264,7 @@ func (em *ExitManager) start(exit *models.Exit) error {
 }
 
 func (em *ExitManager) Stop(exit *models.Exit) error {
-	em.operationMu.Lock()
-	defer em.operationMu.Unlock()
+	defer em.lockExit(exit.ID)()
 	return em.stopWithContext(context.Background(), exit)
 }
 
@@ -248,7 +274,8 @@ func (em *ExitManager) restart(exit *models.Exit) error {
 		return err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	em.logEvent(exit.ID, "restart", "started", "")
 
 	relayPort := 10000 + int(exit.ID)
@@ -318,8 +345,8 @@ func (em *ExitManager) restart(exit *models.Exit) error {
 }
 
 func (em *ExitManager) RestartEnabledExits() error {
-	em.operationMu.Lock()
-	defer em.operationMu.Unlock()
+	em.operationMu.RLock()
+	defer em.operationMu.RUnlock()
 	var exits []models.Exit
 	if err := db.DB.Where("enabled = true AND status = ?", "running").Order("id ASC").Find(&exits).Error; err != nil {
 		return err
@@ -332,7 +359,14 @@ func (em *ExitManager) RestartEnabledExits() error {
 	failures := make([]string, 0)
 	for i := range exits {
 		exit := exits[i]
-		if err := em.restart(&exit); err != nil {
+		unlock := em.lockExitOnly(exit.ID)
+		var current models.Exit
+		err := db.DB.First(&current, exit.ID).Error
+		if err == nil && current.Enabled && current.Status == "running" {
+			err = em.restart(&current)
+		}
+		unlock()
+		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", exit.Name, err))
 			continue
 		}
@@ -349,7 +383,8 @@ func (em *ExitManager) delete(exit *models.Exit) error {
 		return err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	em.logEvent(exit.ID, "delete", "started", "")
 
 	if err := removeExitContainers(ctx, em.docker, exit.Name); err != nil {
@@ -362,28 +397,37 @@ func (em *ExitManager) delete(exit *models.Exit) error {
 }
 
 func (em *ExitManager) GetStatus(exit *models.Exit) (string, string, error) {
-	em.operationMu.Lock()
-	defer em.operationMu.Unlock()
+	defer em.lockExit(exit.ID)()
 	if err := em.ensureDockerAvailable(); err != nil {
 		return "unavailable", "", err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	gStatus, err := em.docker.GetContainerStatus(ctx, "gluetun-"+exit.Name)
 	if err != nil {
 		return "unknown", "", err
 	}
 
-	ip := ""
-	if gStatus == "running" {
-		ip, _ = em.docker.GetPublicIP(ctx, exit.Name)
-	}
-
 	status := "stopped"
+	ip := ""
 	switch gStatus {
 	case "running":
-		status = "running"
+		relayStatus, err := em.docker.GetContainerStatus(ctx, "relay-"+exit.Name)
+		if err != nil {
+			return "unknown", "", err
+		}
+		status = "unhealthy"
+		if relayStatus == "running" {
+			var ipErr error
+			ip, ipErr = em.docker.GetPublicIP(ctx, exit.Name)
+			if ipErr == nil {
+				status = "running"
+			} else {
+				log.Printf("Exit %s public IP probe failed: %v", exit.Name, ipErr)
+			}
+		}
 	case "not_found":
 		status = "not_found"
 	case "exited", "dead":
@@ -403,7 +447,8 @@ func (em *ExitManager) GetLogs(exit *models.Exit, tail int) (string, error) {
 		return "", err
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	return em.docker.GetContainerLogs(ctx, "gluetun-"+exit.Name, tail)
 }
 
@@ -425,7 +470,9 @@ func (em *ExitManager) logEvent(exitID uint, action, status, msg string) {
 }
 
 func (em *ExitManager) refreshPublicIP(exitID uint, exitName string) {
-	ip, err := em.docker.GetPublicIP(context.Background(), exitName)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ip, err := em.docker.GetPublicIP(ctx, exitName)
 	if err != nil {
 		log.Printf("Could not get public IP for %s: %v", exitName, err)
 		return
@@ -523,25 +570,21 @@ func changedRuntimeNames(beforeName, afterName string) []string {
 }
 
 func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
-	em.operationMu.Lock()
-	defer em.operationMu.Unlock()
+	defer em.lockExit(exit.ID)()
 	return em.createAndStart(exit)
 }
 
 func (em *ExitManager) Start(exit *models.Exit) error {
-	em.operationMu.Lock()
-	defer em.operationMu.Unlock()
+	defer em.lockExit(exit.ID)()
 	return em.start(exit)
 }
 
 func (em *ExitManager) Restart(exit *models.Exit) error {
-	em.operationMu.Lock()
-	defer em.operationMu.Unlock()
+	defer em.lockExit(exit.ID)()
 	return em.restart(exit)
 }
 
 func (em *ExitManager) Delete(exit *models.Exit) error {
-	em.operationMu.Lock()
-	defer em.operationMu.Unlock()
+	defer em.lockExit(exit.ID)()
 	return em.delete(exit)
 }

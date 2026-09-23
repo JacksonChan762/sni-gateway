@@ -1,0 +1,174 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+type fakeNginxReloader struct {
+	testErr error
+	hupErr  error
+	tests   int
+	hups    int
+}
+
+func (f *fakeNginxReloader) TestNginxConfig(context.Context, string, string) error {
+	f.tests++
+	return f.testErr
+}
+
+func (f *fakeNginxReloader) KillContainerByComposeService(context.Context, string, string, string) error {
+	f.hups++
+	return f.hupErr
+}
+
+func TestPublishFilesRestoresOldConfigWhenValidationFails(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string]string{"sni_stream.conf": "old stream", "sni_http.conf": "old http"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := &fakeNginxReloader{testErr: errors.New("invalid config")}
+	g := NewConfigGenerator(dir, "", fake)
+	if err := g.publishFiles("new stream", "new http"); err == nil {
+		t.Fatal("expected validation failure")
+	}
+	for name, want := range map[string]string{"sni_stream.conf": "old stream", "sni_http.conf": "old http"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("%s = %q, %v", name, data, err)
+		}
+	}
+	if fake.tests != 1 || fake.hups != 0 {
+		t.Fatalf("tests=%d hups=%d", fake.tests, fake.hups)
+	}
+}
+
+func TestPublishFilesBacksUpOnlyValidatedConfig(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string]string{"sni_stream.conf": "old stream", "sni_http.conf": "old http"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := &fakeNginxReloader{}
+	g := NewConfigGenerator(dir, "", fake)
+	if err := g.publishFiles("new stream", "new http"); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"sni_stream.conf": "new stream", "sni_http.conf": "new http",
+		"sni_stream.conf.bak": "old stream", "sni_http.conf.bak": "old http",
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("%s = %q, %v", name, data, err)
+		}
+	}
+	if fake.tests != 1 || fake.hups != 1 {
+		t.Fatalf("tests=%d hups=%d", fake.tests, fake.hups)
+	}
+}
+
+func TestPublishFilesRestoresOldConfigWhenReloadFails(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string]string{
+		"sni_stream.conf": "old stream", "sni_http.conf": "old http",
+		"sni_stream.conf.bak": "earlier stream", "sni_http.conf.bak": "earlier http",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g := NewConfigGenerator(dir, "", &fakeNginxReloader{hupErr: errors.New("reload failed")})
+	if err := g.publishFiles("new stream", "new http"); err == nil {
+		t.Fatal("expected reload failure")
+	}
+	for name, want := range map[string]string{
+		"sni_stream.conf": "old stream", "sni_http.conf": "old http",
+		"sni_stream.conf.bak": "earlier stream", "sni_http.conf.bak": "earlier http",
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("%s = %q, %v", name, data, err)
+		}
+	}
+}
+
+func TestWriteInitialPreservesPublishedFiles(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string]string{"sni_stream.conf": "published stream", "sni_http.conf": "published http"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g := NewConfigGenerator(dir, "", nil)
+	if err := g.WriteInitial(); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"sni_stream.conf": "published stream", "sni_http.conf": "published http"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("%s = %q, %v", name, data, err)
+		}
+	}
+}
+
+func TestRollbackValidatesBeforeReload(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string]string{
+		"sni_stream.conf": "current stream", "sni_http.conf": "current http",
+		"sni_stream.conf.bak": "backup stream", "sni_http.conf.bak": "backup http",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := &fakeNginxReloader{testErr: errors.New("invalid backup")}
+	g := NewConfigGenerator(dir, "", fake)
+	if err := g.Rollback(); err == nil {
+		t.Fatal("expected validation failure")
+	}
+	for name, want := range map[string]string{"sni_stream.conf": "current stream", "sni_http.conf": "current http"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("%s = %q, %v", name, data, err)
+		}
+	}
+	if fake.tests != 1 || fake.hups != 0 {
+		t.Fatalf("tests=%d hups=%d", fake.tests, fake.hups)
+	}
+}
+
+func TestPendingConfigFilesDistinguishesTimestampsFromRouteChanges(t *testing.T) {
+	dir := t.TempDir()
+	wantStream := "# Generated by sni-gateway at later\n\nmap stream { route-a; }"
+	wantHTTP := "# Generated by sni-gateway at later\n\nmap http { route-a; }"
+	pending, err := pendingConfigFiles(dir, wantStream, wantHTTP)
+	if err != nil || !pending {
+		t.Fatalf("missing files: pending=%v error=%v", pending, err)
+	}
+	for name, body := range map[string]string{
+		"sni_stream.conf": "# Generated by sni-gateway at earlier\n\nmap stream { route-a; }",
+		"sni_http.conf":   "# Generated by sni-gateway at earlier\n\nmap http { route-a; }",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err = pendingConfigFiles(dir, wantStream, wantHTTP)
+	if err != nil || pending {
+		t.Fatalf("timestamp only: pending=%v error=%v", pending, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sni_http.conf"), []byte("map http { route-b; }"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = pendingConfigFiles(dir, wantStream, wantHTTP)
+	if err != nil || !pending {
+		t.Fatalf("changed route: pending=%v error=%v", pending, err)
+	}
+}

@@ -1,6 +1,6 @@
 # SNI Gateway
 
-[v1.1 Beta 更新說明（繁體中文／English）](docs/releases/v1.1-beta.md)
+[v1.1.2 Beta 更新說明（繁體中文／English）](docs/releases/v1.1.2-beta.md) · [v1.1 Beta 更新紀錄](docs/releases/v1.1-beta.md)
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
@@ -57,36 +57,17 @@ SNI Gateway 是一個透過網頁介面管理的 TLS SNI 流量路由閘道器�
 - Docker Compose v2
 - 主機的 80 和 443 連接埠未被佔用
 
-在首次啟動前先生成強度足夠的 `JWT_SECRET`：
-
-```bash
-openssl rand -hex 32
-```
+安裝腳本會自動產生高強度 JWT 密鑰與管理員密碼；此步驟需要 OpenSSL。
 
 ## 快速開始
 
-建立 `.env` 檔案：
+在此專案目錄安裝並啟動服務：
 
 ```bash
-cp .env.example .env
-# 編輯 .env，設定 JWT_SECRET 和 ADMIN_PASSWORD
+./install.sh
 ```
 
-或直接建立：
-
-```bash
-cat > .env <<'EOF'
-JWT_SECRET=請替換為長且隨機的密鑰
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=請替換此密碼
-EOF
-```
-
-啟動服務：
-
-```bash
-docker compose up --build -d
-```
+如果沒有 `.env`，安裝腳本會產生隨機登入憑證；已有 `.env` 時會保留原設定。腳本會檢查 Compose 設定，並等待服務健康檢查通過。登入密碼請查看 `.env` 中的 `ADMIN_PASSWORD`，並妥善保護此檔案。如需自訂帳密，可先將 `.env.example` 複製為 `.env`，替換範例密鑰及密碼後再執行安裝。
 
 檢查健康狀態：
 
@@ -161,7 +142,7 @@ DOMAIN-SUFFIX,example.com
 - `DOMAIN-SUFFIX,example.com` 保留後綴匹配，可接受第三欄策略名稱。
 - 網域統一轉為小寫並移除重複規則；使用 ASCII 或 punycode 網域。不支援的規則類型與無效網域會略過。
 - 下載逾時為 30 秒，超過 10 MiB 的檔案會被拒絕，不會套用截斷內容。
-- 規則採分批寫入，並在同一資料庫交易中替換；資料庫寫入失敗會保留原有規則。交易提交後若 nginx 發布失敗，會另外回報錯誤。
+- 規則變更會在同一資料庫交易中分批寫入；未變更的規則保留 ID，清單沒有變更時不重新發布。上次發布失敗則在下次同步重試。資料庫寫入失敗會保留原有規則；交易提交後若 nginx 發布失敗，會另外回報錯誤。
 - 同步失敗後仍保留排程，於下次排程重試。
 
 ## API 認證
@@ -292,7 +273,7 @@ openssl s_client -connect 你的伺服器IP:443 -servername example.com
 
 ## 運維注意事項
 
-- 變更出口、規則或訂閱不會自動發布 nginx 設定。路由變更後請執行「發布 → 套用」。
+- 手動變更路由後請執行「發布 → 套用」。訂閱規則有變更時會自動發布；後端重新啟動會保留上次發布的設定檔。
 - 執行中的出口在名稱或 runtime 設定變更後會自動協調；已停止的出口會在下次啟動時重建。
 - 預設每 12 小時重新啟動所有啟用的出口。
 - 當有作用中的規則或訂閱仍指向某個出口時，無法刪除該出口，請先停用或刪除這些相依項目。
@@ -329,19 +310,23 @@ npm run build
 
 - 應用程式：支援選用的每日自動更新、資料庫備份與服務健康檢查。設定及復原步驟請參閱 [更新指南（英文）](docs/UPDATES.md)。
 - 儀表板：每 15 秒重新整理，可暫停或手動更新，並提供初次設定指引。
-- 訂閱：啟用的清單依設定排程同步，成功後會自動發布路由設定（包含尚未發布的手動變更）。
+- 訂閱：啟用的清單依設定排程同步；規則有變更時會自動發布路由設定（包含尚未發布的手動變更）。
 - Docker 會直接從原始碼建置前端，更新時不需在主機安裝 Node.js。
 
 ```bash
-bash scripts/update.sh --check
-bash scripts/update.sh --apply
+./update.sh --check
+./update.sh --apply
 ```
+
+更新腳本需要乾淨、追蹤遠端分支的部署目錄，以及正在運行的 PostgreSQL 服務；套用更新前會先備份資料庫。詳見[更新指南](docs/UPDATES.md)。
 
 ## 匹配效能與關閉操作
 
 - 使用 nginx 原生 hostname map，在發布前解決精確／後綴規則的優先級衝突，移除逐條正則匹配與重複鍵。優先級較高者勝出；相同優先級採用較小的規則 ID。網域不分大小寫，HTTP Host 的 port 不影響匹配。
 - Publish → Test domain routing 可預覽已儲存規則的匹配結果，包含尚未發布的變更；此功能不是實際連線測試。
 - Exits → Stop All 同時停止各出口的 VPN 與 relay，逐項顯示失敗原因，保留規則與訂閱。可在介面重新啟動已啟用的出口。停止的出口不會被定時重啟重新開啟，其路由亦不會自動轉往另一出口。
+- 不同出口的操作可同時執行；狀態檢查會在 VPN 容器執行中、但 relay 或公網 IP 探測失敗時回報 `unhealthy`。
+- 儀表板與管理頁面會提示已儲存但尚未寫入 nginx 設定的路由變更；可在「出口」頁按「Check status」更新記錄的出口狀態。
 - 完整停止服務與動態建立的出口：`bash scripts/stop.sh`。此指令先停止後端，再停止資料庫記錄的 VPN／relay，最後停止 Compose 服務，保留設定與資料卷。
 - 恢復管理介面：`docker compose up -d`，再手動啟動需要的出口。單獨重啟後端會保留 VPN 運行；直接使用 `docker compose stop` 不會處理動態出口。
 - 驗證：後端 `go test -race ./...`；前端 `npm ci && npm run build`；腳本 `python3 -m unittest discover -s scripts/tests`。nginx 整合測試需要 nginx 與 `/usr/lib/nginx/modules/ngx_stream_module.so`，缺少時會標示略過。

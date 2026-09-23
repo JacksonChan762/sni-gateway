@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,11 +14,14 @@ import (
 
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/models"
+
+	"gorm.io/gorm"
 )
 
 // NginxReloader is implemented by the Docker client to reload nginx via SIGHUP.
 type NginxReloader interface {
 	KillContainerByComposeService(ctx context.Context, project, service, signal string) error
+	TestNginxConfig(ctx context.Context, project, service string) error
 }
 
 type ConfigGenerator struct {
@@ -39,15 +44,14 @@ func NewConfigGenerator(configDir, pidFile string, reloader NginxReloader) *Conf
 // generateFiles fetches DB state and returns (streamConfig, httpConfig, error).
 func (g *ConfigGenerator) generateFiles() (string, string, error) {
 	var rules []models.Rule
-	if err := db.DB.
-		Where("enabled = true").
-		Order("priority DESC, id ASC").
-		Find(&rules).Error; err != nil {
-		return "", "", err
-	}
-
 	var exits []models.Exit
-	if err := db.DB.Where("enabled = true").Find(&exits).Error; err != nil {
+	err := db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("enabled = true").Order("priority DESC, id ASC").Find(&rules).Error; err != nil {
+			return err
+		}
+		return tx.Where("enabled = true").Find(&exits).Error
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
 		return "", "", err
 	}
 
@@ -70,7 +74,7 @@ func (g *ConfigGenerator) Generate() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "# --- stream context ---\n" + stream + "\n# --- http context ---\n" + http, nil
+	return combinedConfig(stream, http), nil
 }
 
 func buildHostMap(source, target string, lines []string) string {
@@ -97,53 +101,183 @@ func sanitizeName(name string) string {
 func (g *ConfigGenerator) WriteInitial() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	streamFile := filepath.Join(g.NginxConfigDir, "sni_stream.conf")
+	httpFile := filepath.Join(g.NginxConfigDir, "sni_http.conf")
+	if _, err := os.Stat(streamFile); err == nil {
+		if _, err := os.Stat(httpFile); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	stream, http, err := g.generateFiles()
 	if err != nil {
 		return fmt.Errorf("generate initial config: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(g.NginxConfigDir, "sni_stream.conf"), []byte(stream), 0644); err != nil {
+	if err := writeConfigFile(streamFile, []byte(stream)); err != nil {
 		return fmt.Errorf("write sni_stream.conf: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(g.NginxConfigDir, "sni_http.conf"), []byte(http), 0644); err != nil {
+	if err := writeConfigFile(httpFile, []byte(http)); err != nil {
 		return fmt.Errorf("write sni_http.conf: %w", err)
 	}
 	return nil
 }
 
-// WriteAndReload writes both config files and signals nginx to reload via SIGHUP.
-func (g *ConfigGenerator) WriteAndReload(config string) error {
+// Apply publishes the same snapshot returned for the history record.
+func (g *ConfigGenerator) Apply() (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	stream, http, err := g.generateFiles()
 	if err != nil {
-		return fmt.Errorf("generate config: %w", err)
+		return "", fmt.Errorf("generate config: %w", err)
+	}
+	config := combinedConfig(stream, http)
+	return config, g.publishFiles(stream, http)
+}
+
+// publishFiles runs while the generator mutex is held by Apply.
+func (g *ConfigGenerator) publishFiles(stream, http string) error {
+	if g.Reloader == nil {
+		return errors.New("nginx is unavailable; configuration was not applied")
 	}
 
 	streamFile := filepath.Join(g.NginxConfigDir, "sni_stream.conf")
 	httpFile := filepath.Join(g.NginxConfigDir, "sni_http.conf")
-
-	// Backup current files before overwriting
-	for _, f := range []string{streamFile, httpFile} {
-		if data, readErr := os.ReadFile(f); readErr == nil {
-			_ = os.WriteFile(f+".bak", data, 0644)
+	files := []string{streamFile, httpFile}
+	old := make([][]byte, len(files))
+	existed := make([]bool, len(files))
+	var err error
+	for i, f := range files {
+		old[i], err = os.ReadFile(f)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read %s: %w", filepath.Base(f), err)
+		}
+		existed[i] = err == nil
+	}
+	restore := func() error {
+		var errs []error
+		for i, f := range files {
+			if !existed[i] {
+				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+					errs = append(errs, err)
+				}
+			} else if err := writeConfigFile(f, old[i]); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	for i, content := range []string{stream, http} {
+		if err := writeConfigFile(files[i], []byte(content)); err != nil {
+			return errors.Join(fmt.Errorf("write %s: %w", filepath.Base(files[i]), err), restore())
 		}
 	}
-
-	if err := os.WriteFile(streamFile, []byte(stream), 0644); err != nil {
-		return fmt.Errorf("write sni_stream.conf: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := g.Reloader.TestNginxConfig(ctx, g.ComposeProject, "nginx"); err != nil {
+		return errors.Join(fmt.Errorf("nginx -t: %w", err), restore())
 	}
-	if err := os.WriteFile(httpFile, []byte(http), 0644); err != nil {
-		return fmt.Errorf("write sni_http.conf: %w", err)
+	previousBackups := make([][]byte, len(files))
+	hadBackup := make([]bool, len(files))
+	for i, f := range files {
+		previousBackups[i], err = os.ReadFile(f + ".bak")
+		if err != nil && !os.IsNotExist(err) {
+			return errors.Join(fmt.Errorf("read backup %s: %w", filepath.Base(f), err), restore())
+		}
+		hadBackup[i] = err == nil
 	}
-
-	// Signal nginx to reload
-	if g.Reloader != nil {
-		if err := g.Reloader.KillContainerByComposeService(context.Background(), g.ComposeProject, "nginx", "HUP"); err != nil {
-			return fmt.Errorf("nginx reload signal: %w", err)
+	restoreBackups := func() error {
+		var errs []error
+		for i, f := range files {
+			if hadBackup[i] {
+				if err := writeConfigFile(f+".bak", previousBackups[i]); err != nil {
+					errs = append(errs, err)
+				}
+			} else if err := os.Remove(f + ".bak"); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	for i, f := range files {
+		if existed[i] {
+			if err := writeConfigFile(f+".bak", old[i]); err != nil {
+				return errors.Join(fmt.Errorf("backup %s: %w", filepath.Base(f), err), restore(), restoreBackups())
+			}
 		}
 	}
-
+	if err := g.Reloader.KillContainerByComposeService(ctx, g.ComposeProject, "nginx", "HUP"); err != nil {
+		restoreErr := restore()
+		// The signal may have reached nginx even when Docker returned an error.
+		if restoreErr == nil {
+			_ = g.Reloader.KillContainerByComposeService(ctx, g.ComposeProject, "nginx", "HUP")
+		}
+		return errors.Join(fmt.Errorf("nginx reload signal: %w", err), restoreErr, restoreBackups())
+	}
 	return nil
+}
+
+func combinedConfig(stream, http string) string {
+	return "# --- stream context ---\n" + stream + "\n# --- http context ---\n" + http
+}
+
+// HasPendingChanges compares saved routes with the files last written for nginx.
+func (g *ConfigGenerator) HasPendingChanges() (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	stream, http, err := g.generateFiles()
+	if err != nil {
+		return false, err
+	}
+	return pendingConfigFiles(g.NginxConfigDir, stream, http)
+}
+
+func pendingConfigFiles(dir, stream, http string) (bool, error) {
+	for _, item := range []struct{ name, want string }{
+		{"sni_stream.conf", stream}, {"sni_http.conf", http},
+	} {
+		current, err := os.ReadFile(filepath.Join(dir, item.name))
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if routingConfigBody(string(current)) != routingConfigBody(item.want) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func routingConfigBody(config string) string {
+	if strings.HasPrefix(config, "# Generated by sni-gateway at ") {
+		_, body, _ := strings.Cut(config, "\n\n")
+		return body
+	}
+	return config
+}
+
+func writeConfigFile(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".sni-config-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Chmod(0644); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // Rollback restores both config files from backup and signals nginx to reload.
@@ -153,22 +287,49 @@ func (g *ConfigGenerator) Rollback() error {
 	streamFile := filepath.Join(g.NginxConfigDir, "sni_stream.conf")
 	httpFile := filepath.Join(g.NginxConfigDir, "sni_http.conf")
 
-	for _, f := range []string{streamFile, httpFile} {
+	if g.Reloader == nil {
+		return errors.New("nginx is unavailable; configuration was not rolled back")
+	}
+	files := []string{streamFile, httpFile}
+	backup := make([][]byte, len(files))
+	current := make([][]byte, len(files))
+	for i, f := range files {
 		data, err := os.ReadFile(f + ".bak")
 		if err != nil {
 			return fmt.Errorf("no backup for %s: %w", filepath.Base(f), err)
 		}
-		if err := os.WriteFile(f, data, 0644); err != nil {
-			return fmt.Errorf("restore %s: %w", filepath.Base(f), err)
+		backup[i] = data
+		current[i], err = os.ReadFile(f)
+		if err != nil {
+			return fmt.Errorf("read current %s: %w", filepath.Base(f), err)
 		}
 	}
-
-	if g.Reloader != nil {
-		if err := g.Reloader.KillContainerByComposeService(context.Background(), g.ComposeProject, "nginx", "HUP"); err != nil {
-			return fmt.Errorf("nginx reload signal: %w", err)
+	restoreCurrent := func() error {
+		var errs []error
+		for i, f := range files {
+			if err := writeConfigFile(f, current[i]); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	for i, f := range files {
+		if err := writeConfigFile(f, backup[i]); err != nil {
+			return errors.Join(err, restoreCurrent())
 		}
 	}
-
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := g.Reloader.TestNginxConfig(ctx, g.ComposeProject, "nginx"); err != nil {
+		return errors.Join(fmt.Errorf("nginx -t: %w", err), restoreCurrent())
+	}
+	if err := g.Reloader.KillContainerByComposeService(ctx, g.ComposeProject, "nginx", "HUP"); err != nil {
+		restoreErr := restoreCurrent()
+		if restoreErr == nil {
+			_ = g.Reloader.KillContainerByComposeService(ctx, g.ComposeProject, "nginx", "HUP")
+		}
+		return errors.Join(fmt.Errorf("nginx reload signal: %w", err), restoreErr)
+	}
 	return nil
 }
 

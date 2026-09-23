@@ -127,7 +127,6 @@ export default function App() {
                     <LogOut size={14} />
                   </button>
                 </div>
-                <p className="text-xs text-gray-700 text-center mt-2">v1.0.0</p>
               </div>
             </aside>
 

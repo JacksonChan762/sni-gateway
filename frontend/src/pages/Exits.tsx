@@ -2,15 +2,16 @@ import { useEffect, useState, type ChangeEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getExits, createExit, updateExit, deleteExit,
-  startExit, stopExit, stopAllExits, restartExit, getExitLogs, getExitConfig, getApiError,
+  startExit, stopExit, stopAllExits, restartExit, getExitLogs, getExitConfig, getExitStatus, getApiError,
 } from '../api/client'
 import { type Exit } from '../api/client'
 import {
   Plus, Play, Square, RotateCcw, Trash2, Terminal,
-  Globe, X, Pencil, Wifi, Shield, Copy,
+  Globe, X, Pencil, Wifi, Shield, Copy, Activity,
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/ConfirmModal'
+import PublishStatusNotice from '../components/PublishStatusNotice'
 
 // ─── VPN config helpers ───────────────────────────────────────────────────────
 
@@ -267,13 +268,18 @@ export default function Exits() {
   const qc = useQueryClient()
   const toast = useToast()
   const { confirm, modal: confirmModal } = useConfirm()
-  const { data: exits = [], isLoading } = useQuery({ queryKey: ['exits'], queryFn: getExits })
+  const { data: exits = [], isLoading, error, refetch } = useQuery({ queryKey: ['exits'], queryFn: getExits })
   const [showForm, setShowForm] = useState(false)
   const [logModal, setLogModal] = useState<{ exit: Exit; logs: string } | null>(null)
   const [editExit, setEditExit] = useState<Exit | null>(null)
+  const [checkingExitId, setCheckingExitId] = useState<number | null>(null)
 
   const invalidate = async () => {
-    await Promise.all([qc.invalidateQueries({ queryKey: ['exits'] }), qc.invalidateQueries({ queryKey: ['stats'] })])
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ['exits'] }),
+      qc.invalidateQueries({ queryKey: ['stats'] }),
+      qc.invalidateQueries({ queryKey: ['publish-status'] }),
+    ])
   }
 
   const createMut = useMutation({
@@ -329,7 +335,7 @@ export default function Exits() {
     onError: err => toast.error(getApiError(err)),
     onSettled: invalidate,
   })
-  const runtimeBusy = startMut.isPending || stopMut.isPending || restartMut.isPending || stopAllMut.isPending || updateMut.isPending || createMut.isPending || deleteMut.isPending
+  const runtimeBusy = startMut.isPending || stopMut.isPending || restartMut.isPending || stopAllMut.isPending || updateMut.isPending || createMut.isPending || deleteMut.isPending || checkingExitId !== null
   const handleStopAll = async () => {
     const ok = await confirm({
       title: 'Stop All Exits',
@@ -346,6 +352,24 @@ export default function Exits() {
       setLogModal({ exit, logs: res.logs })
     } catch (err) {
       toast.error(getApiError(err))
+    }
+  }
+
+  const handleCheckStatus = async (exit: Exit) => {
+    setCheckingExitId(exit.id)
+    try {
+      const result = await getExitStatus(exit.id)
+      qc.setQueryData<Exit[]>(['exits'], previous => previous?.map(item =>
+        item.id === exit.id ? { ...item, status: result.status, public_ip: result.public_ip } : item
+      ))
+      void qc.invalidateQueries({ queryKey: ['stats'] })
+      const message = `${exit.name}: ${result.status}${result.public_ip ? ` (${result.public_ip})` : ''}`
+      if (result.status === 'unhealthy') toast.error(message)
+      else toast.success(message)
+    } catch (err) {
+      toast.error(`Could not check ${exit.name}: ${getApiError(err)}`)
+    } finally {
+      setCheckingExitId(null)
     }
   }
 
@@ -402,6 +426,13 @@ export default function Exits() {
         </div>
       </div>
 
+      <PublishStatusNotice />
+      <p className="text-xs text-gray-400">Status is the last recorded result. Use Check status on an exit to refresh it.</p>
+      {error && <div role="alert" className="card border-red-800 text-red-300 text-sm">
+        Could not load exits: {getApiError(error)}
+        <button className="btn-secondary ml-3" onClick={() => void refetch()}>Retry</button>
+        {exits.length > 0 && <p className="mt-2">Showing the last received list.</p>}
+      </div>}
       {stopFailures.length > 0 && <div className="card border-red-800" role="alert">
         <p className="text-red-300 mb-2">Some components could not be stopped. Retry Stop All after checking these errors:</p>
         {stopFailures.map(message => <p key={message} className="text-sm text-red-400">{message}</p>)}
@@ -416,7 +447,7 @@ export default function Exits() {
             Loading exits...
           </div>
         </div>
-      ) : exits.length === 0 ? (
+      ) : error && exits.length === 0 ? null : exits.length === 0 ? (
         <div className="card">
           <div className="empty-state">
             <div className="w-14 h-14 rounded-2xl bg-gray-800 flex items-center justify-center mb-4">
@@ -443,6 +474,8 @@ export default function Exits() {
               onCopy={() => copyMut.mutate(exit)}
               onDelete={() => handleDelete(exit)}
               onLogs={() => handleLogs(exit)}
+              onCheck={() => void handleCheckStatus(exit)}
+              checking={checkingExitId === exit.id}
             />
           ))}
         </div>
@@ -487,7 +520,7 @@ export default function Exits() {
 // ─── Exit Card ────────────────────────────────────────────────────────────────
 
 function ExitCard({
-  exit, onStart, onStop, onRestart, onEdit, onCopy, onDelete, onLogs, busy,
+  exit, onStart, onStop, onRestart, onEdit, onCopy, onDelete, onLogs, onCheck, busy, checking,
 }: {
   exit: Exit
   onStart: () => void
@@ -498,6 +531,8 @@ function ExitCard({
   onCopy: () => void
   onDelete: () => void
   onLogs: () => void
+  onCheck: () => void
+  checking: boolean
 }) {
   return (
     <div className="card hover:border-gray-700/80 transition-colors">
@@ -532,6 +567,9 @@ function ExitCard({
         </div>
 
         <div className="flex items-center gap-1 flex-wrap justify-end flex-shrink-0">
+          <button disabled={busy} className="btn-secondary text-xs" onClick={onCheck}>
+            <Activity size={12} className={checking ? 'animate-pulse' : ''} /> {checking ? 'Checking…' : 'Check status'}
+          </button>
           {exit.status !== 'running' && (
             <button disabled={busy || !exit.enabled} className="btn-success text-xs" onClick={onStart}>
               <Play size={12} /> Start

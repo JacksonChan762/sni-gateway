@@ -646,7 +646,7 @@ Response:
 
 ### `POST /api/publish/validate`
 
-Validate the generated config using `nginx -t`.
+Validate the generated routing rules. Apply also runs `nginx -t` against the files mounted in the running nginx container before sending the reload signal.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/publish/validate \
@@ -670,9 +670,26 @@ Failure:
 }
 ```
 
+### `GET /api/publish/status`
+
+Compare saved routes with the configuration files last written for nginx. The generated timestamp is ignored; this does not probe live traffic.
+
+```bash
+curl http://127.0.0.1:8080/api/publish/status \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+
+```json
+{
+  "pending": true
+}
+```
+
 ### `POST /api/publish/apply`
 
-Write the generated config to the nginx shared volume and reload nginx.
+Write one snapshot of the generated config to the nginx shared volume, run `nginx -t`, and signal nginx to reload. On validation or signal failure, restore the previous files.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/publish/apply \

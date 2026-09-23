@@ -21,7 +21,7 @@ func NewSubscriptionHandler(mgr *services.SubscriptionManager, gen *services.Con
 
 func (h *SubscriptionHandler) List(c *fiber.Ctx) error {
 	var subs []models.Subscription
-	if err := db.DB.Preload("Exit").Find(&subs).Error; err != nil {
+	if err := db.DB.Preload("Exit", publicExit).Find(&subs).Error; err != nil {
 		return err
 	}
 	// Count all subscriptions in one query instead of one query per row.
@@ -95,7 +95,7 @@ func (h *SubscriptionHandler) Create(c *fiber.Ctx) error {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
 	}
-	if err := db.DB.Preload("Exit").First(&sub, sub.ID).Error; err != nil {
+	if err := db.DB.Preload("Exit", publicExit).First(&sub, sub.ID).Error; err != nil {
 		return err
 	}
 	return c.Status(201).JSON(sub)
@@ -160,13 +160,13 @@ func (h *SubscriptionHandler) Update(c *fiber.Ctx) error {
 			return err
 		}
 		if h.generator != nil {
-			if err := h.generator.WriteAndReload(""); err != nil {
+			if _, err := h.generator.Apply(); err != nil {
 				return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 			}
 		}
 	}
 
-	if err := db.DB.Preload("Exit").First(&sub, sub.ID).Error; err != nil {
+	if err := db.DB.Preload("Exit", publicExit).First(&sub, sub.ID).Error; err != nil {
 		return err
 	}
 	return c.JSON(sub)
@@ -190,7 +190,7 @@ func (h *SubscriptionHandler) Delete(c *fiber.Ctx) error {
 		return err
 	}
 	if h.generator != nil {
-		if err := h.generator.WriteAndReload(""); err != nil {
+		if _, err := h.generator.Apply(); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
 	}

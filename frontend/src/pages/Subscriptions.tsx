@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/ConfirmModal'
+import PublishStatusNotice from '../components/PublishStatusNotice'
 
 export default function Subscriptions() {
   const qc = useQueryClient()
@@ -22,7 +23,10 @@ export default function Subscriptions() {
   const [editSub, setEditSub] = useState<Subscription | null>(null)
   const [syncing, setSyncing] = useState<number | null>(null)
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['subscriptions'] })
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['subscriptions'] })
+    void qc.invalidateQueries({ queryKey: ['publish-status'] })
+  }
 
   const createMut = useMutation({
     mutationFn: createSubscription,
@@ -77,6 +81,7 @@ export default function Subscriptions() {
         </button>
       </div>
 
+      <PublishStatusNotice />
       <p className="text-sm text-gray-400">Enabled lists sync and publish routing changes automatically. Status refreshes every 15 seconds.</p>
       {error && <div role="alert" className="card border-red-800 text-red-300 text-sm">
         Could not refresh subscriptions: {getApiError(error)}
@@ -159,7 +164,7 @@ function SubCard({
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="font-semibold text-white">{sub.name}</span>
             <span className={sub.enabled ? 'badge-green' : 'badge-gray'}>
-              {sub.enabled ? 'Active' : 'Disabled'}
+              {sub.enabled ? 'Enabled' : 'Disabled'}
             </span>
             {sub.exit && (
               <span className="badge-blue">→ {sub.exit.name}</span>
@@ -191,7 +196,7 @@ function SubCard({
           </div>
 
           {sub.last_error && (
-            <div className="text-xs text-red-400 mt-2 bg-red-950/30 border border-red-800/30 px-2.5 py-1.5 rounded-lg truncate">
+            <div role="alert" className="text-xs text-red-400 mt-2 bg-red-950/30 border border-red-800/30 px-2.5 py-1.5 rounded-lg whitespace-pre-wrap break-words">
               {sub.last_error}
             </div>
           )}
@@ -302,7 +307,7 @@ function SubFormModal({
             >
               <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${form.enabled ? 'left-4' : 'left-0.5'}`} />
             </div>
-            <span className="text-sm text-gray-300">Active</span>
+            <span className="text-sm text-gray-300">Enabled</span>
           </label>
           {error && (
             <div className="text-red-400 text-sm bg-red-950/40 border border-red-800/50 px-3 py-2.5 rounded-xl">

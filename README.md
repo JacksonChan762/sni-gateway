@@ -1,6 +1,6 @@
 # SNI Gateway
 
-[v1.1 Beta — What’s New (English / 繁體中文)](docs/releases/v1.1-beta.md)
+[v1.1.2 Beta — What’s Updated (English / 繁體中文)](docs/releases/v1.1.2-beta.md) · [v1.1 Beta notes](docs/releases/v1.1-beta.md)
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
@@ -49,7 +49,7 @@ The stack:
 - **React admin UI** — served by the backend; communicates with the API using a JWT token.
 - **PostgreSQL** — stores exits, rules, subscriptions, and publish history.
 
-Rules are stored in the database. Publish and apply manual changes to activate them in nginx; subscription syncs also automatically publish the generated configuration.
+Rules are stored in the database. Publish and apply manual changes to activate them in nginx; subscription syncs publish the generated configuration when their rules change.
 
 ## Prerequisites
 
@@ -57,36 +57,17 @@ Rules are stored in the database. Publish and apply manual changes to activate t
 - Docker Compose v2
 - Ports 80 and 443 free on the host
 
-Generate a strong `JWT_SECRET` before first boot:
-
-```bash
-openssl rand -hex 32
-```
+The installer generates a strong JWT secret and admin password. OpenSSL is required for that step.
 
 ## Quick Start
 
-Create a `.env` file:
+Install and start the stack from this checkout:
 
 ```bash
-cp .env.example .env
-# Edit .env and set JWT_SECRET and ADMIN_PASSWORD
+./install.sh
 ```
 
-Or write it directly:
-
-```bash
-cat > .env <<'EOF'
-JWT_SECRET=replace-with-a-long-random-secret
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=replace-this-password
-EOF
-```
-
-Start the stack:
-
-```bash
-docker compose up --build -d
-```
+The installer creates `.env` with random credentials if it does not exist, keeps an existing `.env`, checks the Compose configuration, and waits for healthy services. Read `ADMIN_PASSWORD` from `.env` to sign in. Keep that file private. If you prefer your own credentials, copy `.env.example` to `.env` and replace the example secrets before running the installer.
 
 Check health:
 
@@ -132,9 +113,11 @@ Enabled exits whose recorded status is running are restarted every 12 hours by d
 - **Subscriptions:** enabled lists sync on their configured schedule and automatically publish routing changes.
 
 ```bash
-bash scripts/update.sh --check
-bash scripts/update.sh --apply
+./update.sh --check
+./update.sh --apply
 ```
+
+The updater needs a clean deployment checkout on a branch tracking an upstream and a running PostgreSQL service. It backs up the database before applying an update. See [update setup and recovery](docs/UPDATES.md).
 
 Docker builds the UI directly from source, so application updates include frontend changes.
 
@@ -147,7 +130,7 @@ Docker builds the UI directly from source, so application updates include fronte
 5. Go to Publish → preview → apply to write and reload nginx config.
 6. Test the target domain through the gateway.
 
-Manual routing changes require Publish → Apply. Successful subscription syncs automatically regenerate and reload nginx configuration, including any pending manual routing changes.
+Manual routing changes require Publish → Apply. Subscription syncs regenerate and reload nginx configuration when their rules change, including any pending manual routing changes.
 
 ## Subscription List Format
 
@@ -169,7 +152,7 @@ DOMAIN-SUFFIX,example.com
 
 Subscription rules get priority `50`. Manual rules default to priority `100` and are evaluated first.
 
-Domain names are normalized to lowercase and duplicate rules are removed. Optional policy columns (for example, `DOMAIN-SUFFIX,example.com,Proxy`) are accepted; unsupported rule types and invalid hostnames are skipped. Use ASCII or punycode domain names. Downloads time out after 30 seconds and files larger than 10 MiB are rejected. Rules are replaced in a single database transaction with batched inserts, preserving the old rules if a database write fails. An nginx publish failure is reported separately after the database transaction commits.
+Domain names are normalized to lowercase and duplicate rules are removed. Optional policy columns (for example, `DOMAIN-SUFFIX,example.com,Proxy`) are accepted; unsupported rule types and invalid hostnames are skipped. Use ASCII or punycode domain names. Downloads time out after 30 seconds and files larger than 10 MiB are rejected. Rule changes are applied in one database transaction; unchanged rules keep their IDs and an unchanged list skips publication. A previous publish failure is retried on the next sync. An nginx publish failure is reported separately after the database transaction commits.
 
 ## API Authentication
 
@@ -299,7 +282,7 @@ openssl s_client -connect YOUR_SERVER_IP:443 -servername example.com
 
 ## Operations Notes
 
-- Run Publish → Apply after manual routing changes. Subscription syncs automatically publish the generated config, including pending manual changes.
+- Run Publish → Apply after manual routing changes. Subscription syncs publish when rules change, including pending manual changes. A backend restart preserves the last published config.
 - Running exits are reconciled automatically after name or runtime config changes; stopped exits are recreated on next start.
 - Enabled, running exits restart automatically every 12 hours by default; stopped exits stay stopped.
 - Deleting an exit is blocked when active rules or active subscriptions still reference it. Disable or delete those dependencies first.
@@ -337,6 +320,8 @@ The frontend build writes static files into `backend/public/`, which the backend
 - Routing uses native nginx hostname maps. Priority is resolved before publishing, including conflicts between exact and suffix rules. Higher priority wins; ties use the lowest rule ID. Domains are case-insensitive. HTTP matching ignores the Host port.
 - Duplicate map keys and suffix regex scans are eliminated. Publish → Test domain routing previews saved rules, including unpublished changes; it is not a live connectivity test.
 - Exits → Stop All stops each VPN and its relay, reports individual failures, and keeps rules/subscriptions. Start enabled exits again to resume. A stopped route remains unavailable until restarted; it does not silently fall back to another exit.
+- Exit actions for different exits can proceed concurrently. A status check reports `unhealthy` when the VPN container runs but its relay or public-IP probe fails.
+- The dashboard and management pages flag saved routes that differ from the last written nginx configuration. On Exits, use **Check status** to refresh a recorded exit state.
 - To stop the complete stack **including dynamically created exits**, retaining settings and volumes:
 
   ```bash

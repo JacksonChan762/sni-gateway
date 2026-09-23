@@ -29,12 +29,8 @@ func NewExitHandler(mgr *services.ExitManager) *ExitHandler {
 
 func (h *ExitHandler) List(c *fiber.Ctx) error {
 	var exits []models.Exit
-	if err := db.DB.Find(&exits).Error; err != nil {
+	if err := db.DB.Omit("config_json").Find(&exits).Error; err != nil {
 		return err
-	}
-	// Scrub sensitive fields
-	for i := range exits {
-		exits[i].ConfigJSON = ""
 	}
 	return c.JSON(exits)
 }

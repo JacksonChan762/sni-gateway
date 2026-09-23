@@ -72,3 +72,30 @@ func TestSubscriptionSchedulesConcurrentUpdates(t *testing.T) {
 		t.Fatal("disabled or invalid subscription was scheduled")
 	}
 }
+
+func TestPlanSubscriptionSyncKeepsRuleIDs(t *testing.T) {
+	exitID, otherExit := uint(1), uint(2)
+	existing := []models.Rule{
+		{ID: 10, Pattern: "shared.example", Type: "exact", ExitID: &exitID, Priority: 50, Enabled: true},
+		{ID: 11, Pattern: "removed.example", Type: "exact", ExitID: &exitID, Priority: 50, Enabled: true},
+		{ID: 12, Pattern: "shared.example", Type: "exact", ExitID: &exitID, Priority: 50, Enabled: true},
+	}
+	parsed := []ParsedRule{{Pattern: "shared.example", Type: "exact"}, {Pattern: "new.example", Type: "suffix"}}
+	plan := planSubscriptionSync(existing, parsed, 3, &exitID)
+	if len(plan.update) != 0 || len(plan.insert) != 1 || plan.insert[0].Pattern != "new.example" || len(plan.remove) != 2 {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	for _, id := range plan.remove {
+		if id == 10 {
+			t.Fatal("stable rule ID was removed")
+		}
+	}
+	unchanged := planSubscriptionSync(existing[:1], parsed[:1], 3, &exitID)
+	if len(unchanged.update)+len(unchanged.insert)+len(unchanged.remove) != 0 {
+		t.Fatalf("unchanged list caused writes: %+v", unchanged)
+	}
+	changedExit := planSubscriptionSync(existing[:1], parsed[:1], 3, &otherExit)
+	if len(changedExit.update) != 1 || changedExit.update[0] != 10 || len(changedExit.insert)+len(changedExit.remove) != 0 {
+		t.Fatalf("exit change replaced rule ID: %+v", changedExit)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,14 +115,8 @@ func (sm *SubscriptionManager) SyncSubscription(subID uint) error {
 		return err
 	}
 	parsed := ParseListFile(string(body))
-	rules := make([]models.Rule, 0, len(parsed))
-	for _, pr := range parsed {
-		rules = append(rules, models.Rule{
-			Pattern: pr.Pattern, Type: pr.Type, ExitID: sub.ExitID,
-			Source: "subscription", SubID: &sub.ID, Enabled: true, Priority: 50,
-		})
-	}
-	// Roll back the deletion if any batch fails; readers never see a partial list.
+	changed := false
+	// Keep IDs for unchanged rules so equal-priority overlaps remain stable.
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		// Discard downloads made stale by edits, disabling, or deletion.
 		var current models.Subscription
@@ -131,21 +126,41 @@ func (sm *SubscriptionManager) SyncSubscription(subID uint) error {
 		if !current.Enabled || !current.UpdatedAt.Equal(sub.UpdatedAt) {
 			return fmt.Errorf("subscription changed during download; retry sync")
 		}
-		if err := tx.Where("source = 'subscription' AND sub_id = ?", sub.ID).Delete(&models.Rule{}).Error; err != nil {
+		var existing []models.Rule
+		if err := tx.Select("id", "pattern", "type", "exit_id", "priority", "enabled").
+			Where("source = 'subscription' AND sub_id = ?", sub.ID).Order("id ASC").Find(&existing).Error; err != nil {
 			return err
 		}
-		if len(rules) == 0 {
-			return nil
+		plan := planSubscriptionSync(existing, parsed, sub.ID, sub.ExitID)
+		changed = len(plan.insert) > 0 || len(plan.remove) > 0 || len(plan.update) > 0
+		for start := 0; start < len(plan.remove); start += 500 {
+			end := min(start+500, len(plan.remove))
+			if err := tx.Where("id IN ?", plan.remove[start:end]).Delete(&models.Rule{}).Error; err != nil {
+				return err
+			}
 		}
-		return tx.CreateInBatches(&rules, 500).Error
+		for start := 0; start < len(plan.update); start += 500 {
+			end := min(start+500, len(plan.update))
+			if err := tx.Model(&models.Rule{}).Where("id IN ?", plan.update[start:end]).Updates(map[string]interface{}{
+				"exit_id": sub.ExitID, "priority": 50, "enabled": true,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		if len(plan.insert) > 0 {
+			return tx.CreateInBatches(&plan.insert, 500).Error
+		}
+		return nil
 	})
 	if err != nil {
 		sm.updateSyncStatus(&sub, "failed", err.Error())
 		return err
 	}
 
-	if sm.configGen != nil {
-		if err := sm.configGen.WriteAndReload(""); err != nil {
+	// Retry a previous publish failure even when the downloaded list is unchanged.
+	needsPublish := changed || strings.HasPrefix(sub.LastError, "publish failed:")
+	if needsPublish && sm.configGen != nil {
+		if _, err := sm.configGen.Apply(); err != nil {
 			sm.updateSyncStatus(&sub, "failed", fmt.Sprintf("publish failed: %v", err))
 			return err
 		}
@@ -154,6 +169,46 @@ func (sm *SubscriptionManager) SyncSubscription(subID uint) error {
 	sm.updateSyncStatus(&sub, "success", "")
 	log.Printf("Subscription %d synced: %d rules", subID, len(parsed))
 	return nil
+}
+
+type subscriptionSyncPlan struct {
+	insert []models.Rule
+	update []uint
+	remove []uint
+}
+
+func planSubscriptionSync(existing []models.Rule, parsed []ParsedRule, subID uint, exitID *uint) subscriptionSyncPlan {
+	plan := subscriptionSyncPlan{}
+	byKey := make(map[ParsedRule]models.Rule, len(existing))
+	for _, rule := range existing {
+		key := ParsedRule{Pattern: rule.Pattern, Type: rule.Type}
+		if _, present := byKey[key]; present {
+			plan.remove = append(plan.remove, rule.ID)
+		} else {
+			byKey[key] = rule
+		}
+	}
+	for _, key := range parsed {
+		if rule, present := byKey[key]; present {
+			delete(byKey, key)
+			if !sameExitID(rule.ExitID, exitID) || rule.Priority != 50 || !rule.Enabled {
+				plan.update = append(plan.update, rule.ID)
+			}
+		} else {
+			plan.insert = append(plan.insert, models.Rule{
+				Pattern: key.Pattern, Type: key.Type, ExitID: exitID,
+				Source: "subscription", SubID: &subID, Enabled: true, Priority: 50,
+			})
+		}
+	}
+	for _, rule := range byKey {
+		plan.remove = append(plan.remove, rule.ID)
+	}
+	return plan
+}
+
+func sameExitID(a, b *uint) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 func (sm *SubscriptionManager) updateSyncStatus(sub *models.Subscription, status, errMsg string) {

@@ -1,6 +1,43 @@
 package services
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestExitLocksAllowIndependentOperations(t *testing.T) {
+	em := NewExitManager(nil)
+	unlockFirst := em.lockExit(1)
+	otherDone := make(chan struct{})
+	go func() {
+		unlock := em.lockExit(2)
+		unlock()
+		close(otherDone)
+	}()
+	select {
+	case <-otherDone:
+	case <-time.After(time.Second):
+		t.Fatal("independent exit waited for first exit")
+	}
+
+	sameDone := make(chan struct{})
+	go func() {
+		unlock := em.lockExit(1)
+		unlock()
+		close(sameDone)
+	}()
+	select {
+	case <-sameDone:
+		t.Fatal("same exit operation overlapped")
+	case <-time.After(20 * time.Millisecond):
+	}
+	unlockFirst()
+	select {
+	case <-sameDone:
+	case <-time.After(time.Second):
+		t.Fatal("same exit operation remained blocked")
+	}
+}
 
 func TestChangedRuntimeNamesIncludesOldNameOnRename(t *testing.T) {
 	got := changedRuntimeNames("old", "new")

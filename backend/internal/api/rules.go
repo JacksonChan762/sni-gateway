@@ -19,7 +19,7 @@ func NewRuleHandler() *RuleHandler {
 
 func (h *RuleHandler) List(c *fiber.Ctx) error {
 	var rules []models.Rule
-	q := db.DB.Preload("Exit")
+	q := db.DB.Preload("Exit", publicExit)
 	if source := c.Query("source", "manual"); source != "" && source != "all" {
 		q = q.Where("source = ?", source)
 	}
@@ -60,7 +60,7 @@ func (h *RuleHandler) Create(c *fiber.Ctx) error {
 	if err := db.DB.Create(&rule).Error; err != nil {
 		return err
 	}
-	db.DB.Preload("Exit").First(&rule, rule.ID)
+	db.DB.Preload("Exit", publicExit).First(&rule, rule.ID)
 	return c.Status(201).JSON(rule)
 }
 
@@ -105,7 +105,7 @@ func (h *RuleHandler) CreateBulk(c *fiber.Ctx) error {
 	for _, rule := range rules {
 		ids = append(ids, rule.ID)
 	}
-	if err := db.DB.Preload("Exit").Where("id IN ?", ids).Order("id ASC").Find(&rules).Error; err != nil {
+	if err := db.DB.Preload("Exit", publicExit).Where("id IN ?", ids).Order("id ASC").Find(&rules).Error; err != nil {
 		return err
 	}
 
@@ -177,7 +177,7 @@ func (h *RuleHandler) Update(c *fiber.Ctx) error {
 	if err := db.DB.Save(&rule).Error; err != nil {
 		return err
 	}
-	db.DB.Preload("Exit").First(&rule, rule.ID)
+	db.DB.Preload("Exit", publicExit).First(&rule, rule.ID)
 	return c.JSON(rule)
 }
 

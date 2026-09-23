@@ -101,6 +101,7 @@ export interface Stats {
 // ─── Stats ───────────────────────────────────────────────────────────────────
 
 export const getStats = () => api.get<Stats>('/stats').then(r => r.data)
+export const getPublishStatus = () => api.get<{ pending: boolean }>('/publish/status').then(r => r.data)
 
 // ─── Exits ───────────────────────────────────────────────────────────────────
 

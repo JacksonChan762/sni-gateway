@@ -563,19 +563,58 @@ func (c *Client) ListContainersByPrefix(ctx context.Context, prefix string) ([]C
 // KillContainerByComposeService sends a signal to the first container matching the
 // given docker-compose project and service labels.
 func (c *Client) KillContainerByComposeService(ctx context.Context, project, service, signal string) error {
+	id, err := c.composeServiceContainerID(ctx, project, service)
+	if err != nil {
+		return err
+	}
+	return c.cli.ContainerKill(ctx, id, signal)
+}
+
+func (c *Client) composeServiceContainerID(ctx context.Context, project, service string) (string, error) {
 	f := filters.NewArgs()
 	f.Add("label", "com.docker.compose.project="+project)
 	f.Add("label", "com.docker.compose.service="+service)
 
 	containers, err := c.cli.ContainerList(ctx, container.ListOptions{Filters: f})
 	if err != nil {
-		return fmt.Errorf("list containers: %w", err)
+		return "", fmt.Errorf("list containers: %w", err)
 	}
 	if len(containers) == 0 {
-		return fmt.Errorf("no running container found for service %s/%s", project, service)
+		return "", fmt.Errorf("no running container found for service %s/%s", project, service)
 	}
+	return containers[0].ID, nil
+}
 
-	return c.cli.ContainerKill(ctx, containers[0].ID, signal)
+// TestNginxConfig checks the files mounted in the running nginx container.
+func (c *Client) TestNginxConfig(ctx context.Context, project, service string) error {
+	id, err := c.composeServiceContainerID(ctx, project, service)
+	if err != nil {
+		return err
+	}
+	exec, err := c.cli.ContainerExecCreate(ctx, id, types.ExecConfig{
+		Cmd: []string{"nginx", "-t"}, AttachStdout: true, AttachStderr: true,
+	})
+	if err != nil {
+		return err
+	}
+	attach, err := c.cli.ContainerExecAttach(ctx, exec.ID, types.ExecStartCheck{})
+	if err != nil {
+		return err
+	}
+	var stdout, stderr strings.Builder
+	_, copyErr := stdcopy.StdCopy(&stdout, &stderr, attach.Reader)
+	attach.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	result, err := c.cli.ContainerExecInspect(ctx, exec.ID)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("exit code %d: %s", result.ExitCode, strings.TrimSpace(stdout.String()+"\n"+stderr.String()))
+	}
+	return nil
 }
 
 // GetPublicIP fetches the public IP from gluetun's control server inside the container
@@ -600,16 +639,22 @@ func (c *Client) GetPublicIP(ctx context.Context, exitName string) (string, erro
 	if _, err := stdcopy.StdCopy(buf, errBuf, attachResp.Reader); err != nil {
 		return "", err
 	}
-	output := strings.TrimSpace(buf.String())
-	if output == "" {
-		output = strings.TrimSpace(errBuf.String())
+	execResult, err := c.cli.ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		return "", err
+	}
+	if execResult.ExitCode != 0 {
+		return "", fmt.Errorf("public IP probe failed (exit %d): %s", execResult.ExitCode, strings.TrimSpace(errBuf.String()))
 	}
 
 	var result struct {
 		PublicIP string `json:"public_ip"`
 	}
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		return output, nil
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &result); err != nil {
+		return "", fmt.Errorf("invalid public IP response: %w", err)
+	}
+	if _, err := netip.ParseAddr(result.PublicIP); err != nil {
+		return "", fmt.Errorf("invalid public IP %q: %w", result.PublicIP, err)
 	}
 	return result.PublicIP, nil
 }

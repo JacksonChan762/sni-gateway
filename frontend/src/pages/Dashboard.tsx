@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import PublishStatusNotice from '../components/PublishStatusNotice'
 
 function StatusDot({ status }: { status: string }) {
   if (status === 'running') return <span className="status-dot-running" />
@@ -35,7 +36,7 @@ export default function Dashboard() {
 
   const statCards = [
     {
-      label: 'Active Rules',
+      label: 'Enabled Rules',
       value: stats?.rule_count ?? '—',
       icon: ListFilter,
       color: 'text-indigo-400',
@@ -53,7 +54,7 @@ export default function Dashboard() {
       to: '/subscriptions',
     },
     {
-      label: 'Total Exits',
+      label: 'Enabled Exits',
       value: stats?.exit_count ?? '—',
       icon: Globe,
       color: 'text-emerald-400',
@@ -97,6 +98,7 @@ export default function Dashboard() {
           {(stats || exits) && <p className="mt-1">Previously received data is shown below.</p>}
         </div>
       )}
+      <PublishStatusNotice />
       {stats && !statsError && !exitsError && (!stats.exit_count || !stats.rule_count || !stats.last_publish?.id) && (
         <section className="card space-y-4" aria-labelledby="setup-title">
           <h2 id="setup-title" className="font-semibold text-white">Get your gateway ready</h2>
@@ -143,7 +145,7 @@ export default function Dashboard() {
       {/* Exits table */}
       <div className="card p-0 overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800/80">
-          <h2 className="text-sm font-semibold text-gray-300">Exit Status</h2>
+          <h2 className="text-sm font-semibold text-gray-300">Last recorded exit status</h2>
           <Link to="/exits" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1">
             Manage <ArrowRight size={12} />
           </Link>

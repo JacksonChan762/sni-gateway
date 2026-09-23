@@ -26,6 +26,14 @@ func (h *PublishHandler) Preview(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"config": config})
 }
 
+func (h *PublishHandler) Status(c *fiber.Ctx) error {
+	pending, err := h.generator.HasPendingChanges()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"pending": pending})
+}
+
 func (h *PublishHandler) Validate(c *fiber.Ctx) error {
 	_, err := h.generator.Preview()
 	if err != nil {
@@ -35,13 +43,8 @@ func (h *PublishHandler) Validate(c *fiber.Ctx) error {
 }
 
 func (h *PublishHandler) Apply(c *fiber.Ctx) error {
-	config, err := h.generator.Generate()
+	config, err := h.generator.Apply()
 	if err != nil {
-		h.recordHistory("failed", err.Error(), config)
-		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
-	}
-
-	if err := h.generator.WriteAndReload(config); err != nil {
 		h.recordHistory("failed", err.Error(), config)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -61,12 +64,8 @@ func (h *PublishHandler) Rollback(c *fiber.Ctx) error {
 
 func (h *PublishHandler) History(c *fiber.Ctx) error {
 	var history []models.PublishHistory
-	if err := db.DB.Order("created_at DESC").Limit(50).Find(&history).Error; err != nil {
+	if err := db.DB.Select("id", "version", "status", "message", "created_at").Order("created_at DESC").Limit(50).Find(&history).Error; err != nil {
 		return err
-	}
-	// Scrub config content for list view
-	for i := range history {
-		history[i].Config = ""
 	}
 	return c.JSON(history)
 }
@@ -85,7 +84,7 @@ func getDashboardStats(c *fiber.Ctx) error {
 	db.DB.Model(&models.Exit{}).Where("status = 'running'").Count(&runningExitCount)
 
 	var lastPublish models.PublishHistory
-	db.DB.Order("created_at DESC").First(&lastPublish)
+	db.DB.Select("id", "version", "status", "message", "created_at").Order("created_at DESC").First(&lastPublish)
 
 	return c.JSON(fiber.Map{
 		"rule_count":         ruleCount,

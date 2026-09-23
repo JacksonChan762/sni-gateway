@@ -97,6 +97,7 @@ func (s *Server) registerRoutes() {
 	api.Get("/exits/:id/status", s.exits.Status)
 
 	// Publish
+	api.Get("/publish/status", s.publish.Status)
 	api.Post("/publish/preview", s.publish.Preview)
 	api.Post("/publish/validate", s.publish.Validate)
 	api.Post("/publish/apply", s.publish.Apply)

@@ -5,6 +5,7 @@ import { type Rule } from '../api/client'
 import { Plus, Trash2, Pencil, X, ListFilter, Search } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/ConfirmModal'
+import PublishStatusNotice from '../components/PublishStatusNotice'
 
 type RuleFormType = Rule['type'] | 'auto'
 
@@ -12,17 +13,20 @@ export default function Rules() {
   const qc = useQueryClient()
   const toast = useToast()
   const { confirm, modal: confirmModal } = useConfirm()
-  const { data: rules = [], isLoading } = useQuery({ queryKey: ['rules'], queryFn: getRules })
+  const { data: rules = [], isLoading, error, refetch } = useQuery({ queryKey: ['rules'], queryFn: getRules })
   const { data: exits = [] } = useQuery({ queryKey: ['exits'], queryFn: getExits })
   const [showForm, setShowForm] = useState(false)
   const [editRule, setEditRule] = useState<Rule | null>(null)
   const [search, setSearch] = useState('')
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['rules'] })
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['rules'] })
+    void qc.invalidateQueries({ queryKey: ['publish-status'] })
+  }
 
   const createMut = useMutation({
     mutationFn: createRule,
-    onSuccess: () => { invalidate(); setShowForm(false); toast.success('Rule created') },
+    onSuccess: () => { invalidate(); setShowForm(false); toast.success('Rule saved. Publish to update live routing.') },
     onError: err => toast.error(getApiError(err)),
   })
   const createBulkMut = useMutation({
@@ -30,18 +34,18 @@ export default function Rules() {
     onSuccess: data => {
       invalidate()
       setShowForm(false)
-      toast.success(`${data.created_count} rules created`)
+      toast.success(`${data.created_count} rules saved. Publish to update live routing.`)
     },
     onError: err => toast.error(getApiError(err)),
   })
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Rule> }) => updateRule(id, data),
-    onSuccess: () => { invalidate(); setEditRule(null); toast.success('Rule updated') },
+    onSuccess: () => { invalidate(); setEditRule(null); toast.success('Rule saved. Publish to update live routing.') },
     onError: err => toast.error(getApiError(err)),
   })
   const deleteMut = useMutation({
     mutationFn: deleteRule,
-    onSuccess: () => { invalidate(); toast.success('Rule deleted') },
+    onSuccess: () => { invalidate(); toast.success('Rule deleted. Publish to update live routing.') },
     onError: err => toast.error(getApiError(err)),
   })
 
@@ -77,6 +81,13 @@ export default function Rules() {
         </button>
       </div>
 
+      <PublishStatusNotice />
+      {error && <div role="alert" className="card border-red-800 text-red-300 text-sm">
+        Could not load rules: {getApiError(error)}
+        <button className="btn-secondary ml-3" onClick={() => void refetch()}>Retry</button>
+        {rules.length > 0 && <p className="mt-2">Showing the last received list.</p>}
+      </div>}
+
       {/* Filters */}
       {rules.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
@@ -85,6 +96,7 @@ export default function Rules() {
             <input
               className="input pl-8 text-sm"
               placeholder="Search by pattern or exit..."
+              aria-label="Search rules by pattern or exit"
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -102,7 +114,7 @@ export default function Rules() {
             Loading rules...
           </div>
         </div>
-      ) : rules.length === 0 ? (
+      ) : error && rules.length === 0 ? null : rules.length === 0 ? (
         <div className="card">
           <div className="empty-state">
             <div className="w-14 h-14 rounded-2xl bg-gray-800 flex items-center justify-center mb-4">
@@ -151,7 +163,7 @@ export default function Rules() {
                     <td className="px-4 py-3 text-gray-500 text-xs tabular-nums">{rule.priority}</td>
                     <td className="px-4 py-3">
                       <span className={rule.enabled ? 'badge-green' : 'badge-gray'}>
-                        {rule.enabled ? 'Active' : 'Disabled'}
+                        {rule.enabled ? 'Enabled' : 'Disabled'}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -340,7 +352,7 @@ function RuleFormModal({
             >
               <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${form.enabled ? 'left-4' : 'left-0.5'}`} />
             </div>
-            <span className="text-sm text-gray-300">Active</span>
+            <span className="text-sm text-gray-300">Enabled</span>
           </label>
           {displayError && (
             <div className="text-red-400 text-sm bg-red-950/40 border border-red-800/50 px-3 py-2.5 rounded-xl">

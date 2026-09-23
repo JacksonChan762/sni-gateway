@@ -51,6 +51,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.map(t => (
           <div
             key={t.id}
+            role={t.type === 'error' ? 'alert' : 'status'}
             className={`flex items-start gap-3 px-4 py-3 rounded-xl shadow-2xl text-sm border animate-slide-in ${
               t.type === 'success'
                 ? 'bg-green-950 border-green-700/60 text-green-100'
@@ -71,6 +72,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             <span className="flex-1 leading-relaxed">{t.text}</span>
             <button
               onClick={() => dismiss(t.id)}
+              aria-label="Dismiss notification"
               className="opacity-50 hover:opacity-100 transition-opacity mt-0.5 flex-shrink-0"
             >
               <X size={14} />
