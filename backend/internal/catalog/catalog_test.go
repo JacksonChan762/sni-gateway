@@ -72,4 +72,15 @@ func TestLocationSelectionIsStableAndWithinSelectedCity(t *testing.T) {
 	if _, err := Select("protonvpn", "openvpn", "Afghanistan", "missing city", "my-exit"); err == nil {
 		t.Fatal("accepted unavailable city")
 	}
+	cityOnly, err := Select("protonvpn", "openvpn", "", "Kabul", "my-exit", "udp")
+	if err != nil || cityOnly.Country != "Afghanistan" || cityOnly.City != "Kabul" {
+		t.Fatalf("city-only selection failed: %+v, %v", cityOnly, err)
+	}
+	if _, err := Select("protonvpn", "openvpn", "", "", "my-exit"); err == nil {
+		t.Fatal("accepted selection without country or city")
+	}
+	cityOverridesCountry, err := Select("protonvpn", "openvpn", "Taiwan", "Kabul", "my-exit", "udp")
+	if err != nil || cityOverridesCountry.Country != "Afghanistan" {
+		t.Fatalf("city did not override country filter: %+v, %v", cityOverridesCountry, err)
+	}
 }

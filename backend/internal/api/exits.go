@@ -300,6 +300,9 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	if exit.Runtime == "" {
 		exit.Runtime = "sing-box"
 	}
+	if before.Runtime != exit.Runtime || before.Protocol != exit.Protocol || before.Provider != exit.Provider || before.City != exit.City || (exit.City == "" && before.Country != exit.Country) {
+		exit.EndpointIP = ""
+	}
 
 	if err := db.DB.Save(&exit).Error; err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -369,8 +372,8 @@ func validateExitRequest(req CreateExitRequest) error {
 		return provider.Validate(models.Exit{Protocol: req.Protocol, Provider: req.Provider, Country: req.Country, City: req.City, ConfigJSON: config})
 	}
 	auto := req.AutoServer != nil && *req.AutoServer
-	if auto && (req.Provider == "" || req.Provider == "custom" || req.Country == "") {
-		return fmt.Errorf("choose a VPN provider and country for automatic server selection")
+	if auto && (req.Provider == "" || req.Provider == "custom" || (req.Country == "" && req.City == "")) {
+		return fmt.Errorf("choose a VPN provider and country or city for automatic server selection")
 	}
 	if req.Protocol == "wireguard" {
 		if auto {

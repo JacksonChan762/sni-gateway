@@ -239,23 +239,50 @@ func ListLocations(provider, protocol, country string) (Locations, error) {
 }
 
 func Select(provider, protocol, country, city, seed string, transport ...string) (Server, error) {
-	data, err := Load()
+	candidates, err := Candidates(provider, protocol, country, city, transport...)
 	if err != nil {
 		return Server{}, err
 	}
+	// A stable choice avoids changing the endpoint between validation and start.
+	var hash uint32 = 2166136261
+	for _, b := range []byte(seed) {
+		hash = (hash ^ uint32(b)) * 16777619
+	}
+	return candidates[int(hash%uint32(len(candidates)))], nil
+}
+
+func SelectIP(provider, protocol, country, city, ip string, transport ...string) (Server, error) {
+	candidates, err := Candidates(provider, protocol, country, city, transport...)
+	if err != nil {
+		return Server{}, err
+	}
+	for _, server := range candidates {
+		if server.IP == ip {
+			return server, nil
+		}
+	}
+	return Server{}, errors.New("selected VPN endpoint is no longer available in this location")
+}
+
+func Candidates(provider, protocol, country, city string, transport ...string) ([]Server, error) {
+	data, err := Load()
+	if err != nil {
+		return nil, err
+	}
 	servers, ok := data.Providers[provider]
 	if !ok {
-		return Server{}, errors.New("unknown VPN provider")
+		return nil, errors.New("unknown VPN provider")
 	}
 	if protocol != "openvpn" && protocol != "wireguard" {
-		return Server{}, errors.New("protocol must be openvpn or wireguard")
+		return nil, errors.New("protocol must be openvpn or wireguard")
 	}
-	if country == "" {
-		return Server{}, errors.New("select a VPN country")
+	if country == "" && city == "" {
+		return nil, errors.New("select a VPN country or city")
 	}
 	var candidates []Server
+	seenIP := map[string]bool{}
 	for _, server := range servers {
-		if server.Protocol != protocol || !strings.EqualFold(server.Country, country) {
+		if server.Protocol != protocol || (city == "" && country != "" && !strings.EqualFold(server.Country, country)) {
 			continue
 		}
 		if city != "" && !strings.EqualFold(server.City, city) {
@@ -273,15 +300,14 @@ func Select(provider, protocol, country, city, seed string, transport ...string)
 		if _, err := netip.ParseAddr(server.IP); err != nil {
 			continue
 		}
+		if seenIP[server.IP] {
+			continue
+		}
+		seenIP[server.IP] = true
 		candidates = append(candidates, server)
 	}
 	if len(candidates) == 0 {
-		return Server{}, errors.New("no compatible VPN server for provider and location")
+		return nil, errors.New("no compatible VPN server for provider and location")
 	}
-	// A stable choice avoids changing the endpoint between validation and start.
-	var hash uint32 = 2166136261
-	for _, b := range []byte(seed) {
-		hash = (hash ^ uint32(b)) * 16777619
-	}
-	return candidates[int(hash%uint32(len(candidates)))], nil
+	return candidates, nil
 }

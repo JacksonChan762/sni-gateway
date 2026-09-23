@@ -81,8 +81,11 @@ func Validate(exit models.Exit) error {
 	if !Native(exit.Provider) {
 		return fmt.Errorf("unsupported Gluetun provider %q", exit.Provider)
 	}
-	if strings.TrimSpace(exit.Country) == "" {
-		return errors.New("choose a provider country")
+	if strings.TrimSpace(exit.Country) == "" && strings.TrimSpace(exit.City) == "" {
+		return errors.New("choose a provider country or city")
+	}
+	if exit.Runtime == "gluetun" && strings.TrimSpace(exit.Country) == "" {
+		return errors.New("choose a provider country for Gluetun")
 	}
 	credentials, err := Parse(exit.ConfigJSON)
 	if err != nil {

@@ -33,7 +33,13 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 		if !provider.WireGuard(exit.Provider) {
 			return nil, fmt.Errorf("%s has no supported WireGuard provider configuration", exit.Provider)
 		}
-		server, err := catalog.Select(exit.Provider, "wireguard", exit.Country, exit.City, exit.Name)
+		var server catalog.Server
+		var err error
+		if exit.EndpointIP != "" {
+			server, err = catalog.SelectIP(exit.Provider, "wireguard", exit.Country, exit.City, exit.EndpointIP)
+		} else {
+			server, err = catalog.Select(exit.Provider, "wireguard", exit.Country, exit.City, exit.Name)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +144,12 @@ func buildOpenVPNConfig(exit models.Exit, raw map[string]any) ([]byte, error) {
 		if network == "" {
 			network, _ = endpoint["network"].(string)
 		}
-		server, err := catalog.Select(exit.Provider, "openvpn", exit.Country, exit.City, exit.Name, network)
+		var server catalog.Server
+		if exit.EndpointIP != "" {
+			server, err = catalog.SelectIP(exit.Provider, "openvpn", exit.Country, exit.City, exit.EndpointIP, network)
+		} else {
+			server, err = catalog.Select(exit.Provider, "openvpn", exit.Country, exit.City, exit.Name, network)
+		}
 		if err != nil {
 			return nil, err
 		}

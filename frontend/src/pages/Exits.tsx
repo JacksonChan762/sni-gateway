@@ -204,6 +204,7 @@ function validateExitForm(
   openvpnProfile: string,
   provider: string,
   country: string,
+  city: string,
   openvpnUser: string,
   openvpnPassword: string,
   openvpnCert: string,
@@ -211,7 +212,7 @@ function validateExitForm(
   openvpnKeyPassphrase: string
 ) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(name.trim())) return 'Use 1–63 letters, numbers, hyphens, or underscores for the name'
-  if (provider !== 'custom' && !country) return 'Choose a country for automatic server selection'
+  if (provider !== 'custom' && !country && !city) return 'Choose a country or city for automatic server selection'
   if (protocol === 'openvpn') {
     if (!providerMode) return openvpnProfile.trim() ? '' : 'Import or paste a complete .ovpn profile'
     const needsUser = !['airvpn', 'vpnsecure'].includes(provider)
@@ -597,9 +598,10 @@ function ExitCard({
             {exit.public_ip && (
               <div className="text-xs font-mono text-indigo-400 mt-1.5 flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 inline-block" />
-                {exit.public_ip}
+                Public IP: {exit.public_ip}
               </div>
             )}
+            {exit.endpoint_ip && <div className="text-xs font-mono text-gray-500 mt-1">VPN endpoint: {exit.endpoint_ip}</div>}
           </div>
         </div>
 
@@ -770,7 +772,7 @@ function ExitFormModal({
   }, [configData, exit])
 
   const handleSubmit = () => {
-    const err = validateExitForm(form.name, providerMode, form.protocol, form.environment_yaml, form.openvpn_profile, form.provider, form.country,
+    const err = validateExitForm(form.name, providerMode, form.protocol, form.environment_yaml, form.openvpn_profile, form.provider, form.country, form.city,
       form.openvpn_user, form.openvpn_password, form.openvpn_cert, form.openvpn_key, form.openvpn_key_passphrase)
     if (err) { setLocalError(err); return }
     setLocalError('')

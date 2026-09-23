@@ -26,10 +26,10 @@ export default function ProviderLocationPicker({ protocol, provider, country, ci
     {provider !== 'custom' && provider !== '' && <div className="grid grid-cols-2 gap-2">
       <select className="input text-xs" aria-label="VPN country" value={country}
         onChange={event => onChange(provider, event.target.value, '')}>
-        <option value="">Choose country</option>
+        <option value="">Any country</option>
         {(locations.data?.countries ?? []).map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
       </select>
-      <select className="input text-xs" aria-label="VPN city" value={city} disabled={!country}
+      <select className="input text-xs" aria-label="VPN city" value={city}
         onChange={event => onChange(provider, country, event.target.value)}>
         <option value="">Any city</option>
         {(locations.data?.cities ?? []).map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
@@ -37,6 +37,6 @@ export default function ProviderLocationPicker({ protocol, provider, country, ci
     </div>}
     {providers.error && <p className="text-xs text-red-400">Catalog unavailable: {getApiError(providers.error)}</p>}
     {locations.error && <p className="text-xs text-red-400">Could not load locations: {getApiError(locations.error)}</p>}
-    {provider !== 'custom' && <p className="text-xs text-gray-400">{providerMode ? 'sing-box connects to a server in this location. Enter only the credentials required by your provider below.' : 'Change the provider or location to use the simplified sing-box provider mode.'}</p>}
+    {provider !== 'custom' && <p className="text-xs text-gray-400">{providerMode ? 'Country filters the city list. A selected city takes priority over country; Any city searches the selected country. Each connection tests up to four endpoints and chooses the fastest measured one.' : 'Change the provider or location to use the simplified sing-box provider mode.'}</p>}
   </div>
 }

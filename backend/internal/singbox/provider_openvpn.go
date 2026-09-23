@@ -16,7 +16,13 @@ import (
 )
 
 func buildProviderOpenVPNProfile(exit models.Exit, clientCert, clientKey, passphrase string) (string, error) {
-	server, err := catalog.Select(exit.Provider, "openvpn", exit.Country, exit.City, exit.Name)
+	var server catalog.Server
+	var err error
+	if exit.EndpointIP != "" {
+		server, err = catalog.SelectIP(exit.Provider, "openvpn", exit.Country, exit.City, exit.EndpointIP)
+	} else {
+		server, err = catalog.Select(exit.Provider, "openvpn", exit.Country, exit.City, exit.Name)
+	}
 	if err != nil {
 		return "", err
 	}

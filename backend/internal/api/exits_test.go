@@ -101,6 +101,8 @@ func TestValidateSingBoxProviderCredentialsWithoutProfiles(t *testing.T) {
 	for _, request := range []CreateExitRequest{
 		{Name: "proton-wg", Runtime: "sing-box", Protocol: "wireguard", Provider: "protonvpn", Country: "Taiwan", City: "Taipei", AutoServer: &auto, WireguardPrivKey: key},
 		{Name: "proton-ovpn", Runtime: "sing-box", Protocol: "openvpn", Provider: "protonvpn", Country: "Taiwan", City: "Taipei", AutoServer: &auto, OpenVPNUser: "test", OpenVPNPassword: "test"},
+		{Name: "city-wg", Runtime: "sing-box", Protocol: "wireguard", Provider: "protonvpn", City: "Taipei", AutoServer: &auto, WireguardPrivKey: key},
+		{Name: "city-ovpn", Runtime: "sing-box", Protocol: "openvpn", Provider: "protonvpn", City: "Taipei", AutoServer: &auto, OpenVPNUser: "test", OpenVPNPassword: "test"},
 	} {
 		if err := validateExitRequest(request); err != nil {
 			t.Fatalf("%s: %v", request.Name, err)

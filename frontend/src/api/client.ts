@@ -48,6 +48,7 @@ export interface Exit {
   city: string
   status: string
   public_ip: string
+  endpoint_ip: string
   enabled: boolean
   created_at: string
   updated_at: string

@@ -14,6 +14,7 @@ type Exit struct {
 	City       string    `json:"city"`
 	Status     string    `json:"status" gorm:"default:'stopped'"` // running/stopped/unhealthy
 	PublicIP   string    `json:"public_ip"`
+	EndpointIP string    `json:"endpoint_ip"`
 	Enabled    bool      `json:"enabled" gorm:"default:true"`
 	ConfigJSON string    `json:"config_json,omitempty" gorm:"type:jsonb"`
 	CreatedAt  time.Time `json:"created_at"`

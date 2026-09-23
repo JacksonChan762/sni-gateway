@@ -3,7 +3,40 @@ package services
 import (
 	"testing"
 	"time"
+
+	"sni-gateway/internal/catalog"
+	"sni-gateway/internal/models"
 )
+
+func TestCountryDoesNotRecreateCitySelectedSingBox(t *testing.T) {
+	before := &models.Exit{Runtime: "sing-box", Protocol: "wireguard", Provider: "protonvpn", Country: "Taiwan", City: "Taipei"}
+	after := *before
+	after.Country = "Hong Kong"
+	if exitRuntimeConfigChanged(before, &after) {
+		t.Fatal("country filter restarted a city-selected VPN")
+	}
+	after.City = ""
+	if !exitRuntimeConfigChanged(before, &after) {
+		t.Fatal("clearing city did not restart VPN")
+	}
+}
+
+func TestEndpointTrialsKeepsPreviousAndSamplesDistinctIPs(t *testing.T) {
+	candidates := []catalog.Server{{IP: "192.0.2.1"}, {IP: "192.0.2.2"}, {IP: "192.0.2.3"}, {IP: "192.0.2.4"}, {IP: "192.0.2.5"}}
+	for i := 0; i < 20; i++ {
+		trials := endpointTrials(candidates, "192.0.2.3")
+		if len(trials) != maxEndpointTrials || trials[0].IP != "192.0.2.3" {
+			t.Fatalf("unexpected trials: %+v", trials)
+		}
+		seen := map[string]bool{}
+		for _, server := range trials {
+			if seen[server.IP] {
+				t.Fatalf("duplicate endpoint: %+v", trials)
+			}
+			seen[server.IP] = true
+		}
+	}
+}
 
 func TestExitLocksAllowIndependentOperations(t *testing.T) {
 	em := NewExitManager(nil)

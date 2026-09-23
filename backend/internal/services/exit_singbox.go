@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
+	"sni-gateway/internal/catalog"
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/gateway"
 	"sni-gateway/internal/models"
@@ -19,6 +22,9 @@ import (
 func (em *ExitManager) createAndStartSingBox(exit *models.Exit) error {
 	if err := em.ensureDockerAvailable(); err != nil {
 		return err
+	}
+	if autoServerExit(exit) {
+		return em.createAndStartAutoSingBox(exit)
 	}
 	config, err := singbox.BuildExitConfig(*exit)
 	if err != nil {
@@ -51,6 +57,134 @@ func (em *ExitManager) createAndStartSingBox(exit *models.Exit) error {
 		return err
 	}
 	em.logEvent(exit.ID, "start", "success", "VPN connected; public IP "+ip)
+	return nil
+}
+
+const maxEndpointTrials = 4
+
+type measuredEndpoint struct {
+	endpointIP string
+	publicIP   string
+	config     []byte
+	latency    time.Duration
+}
+
+func autoServerExit(exit *models.Exit) bool {
+	config := parseConfigJSON(exit.ConfigJSON)
+	switch value := config["auto_server"].(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	}
+	return false
+}
+
+// Include the last successful endpoint so it can win again. Sample other
+// endpoints on every connection and bound the work for large countries.
+func endpointTrials(candidates []catalog.Server, previous string) []catalog.Server {
+	if len(candidates) == 0 {
+		return nil
+	}
+	limit := min(maxEndpointTrials, len(candidates))
+	result := make([]catalog.Server, 0, limit)
+	for _, server := range candidates {
+		if server.IP == previous {
+			result = append(result, server)
+			break
+		}
+	}
+	for _, index := range rand.Perm(len(candidates)) {
+		if len(result) == limit {
+			break
+		}
+		server := candidates[index]
+		if server.IP != previous {
+			result = append(result, server)
+		}
+	}
+	return result
+}
+
+func (em *ExitManager) createAndStartAutoSingBox(exit *models.Exit) error {
+	candidates, err := catalog.Candidates(exit.Provider, exit.Protocol, exit.Country, exit.City)
+	if err != nil {
+		return err
+	}
+	trials := endpointTrials(candidates, exit.EndpointIP)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	em.logEvent(exit.ID, "start", "started", "testing VPN endpoints")
+
+	var measured []measuredEndpoint
+	var activeEndpoint string
+	var lastErr error
+	for _, server := range trials {
+		candidateExit := *exit
+		candidateExit.EndpointIP = server.IP
+		config, buildErr := singbox.BuildExitConfig(candidateExit)
+		if buildErr != nil {
+			lastErr = buildErr
+			continue
+		}
+		start := time.Now()
+		if err = em.docker.CreateSingBoxContainer(ctx, exit.Name, config); err != nil {
+			lastErr = err
+			activeEndpoint = ""
+			continue
+		}
+		activeEndpoint = server.IP
+		ip, probeErr := probeProviderPublicIPFor(ctx, exit.Name, 40*time.Second)
+		if probeErr != nil {
+			lastErr = probeErr
+			continue
+		}
+		measured = append(measured, measuredEndpoint{endpointIP: server.IP, publicIP: ip, config: config, latency: time.Since(start)})
+	}
+	if len(measured) == 0 {
+		exit.Status, exit.PublicIP = "unhealthy", ""
+		if dbErr := db.DB.Model(exit).Updates(map[string]any{"status": exit.Status, "public_ip": ""}).Error; dbErr != nil {
+			return dbErr
+		}
+		em.logEvent(exit.ID, "start", "failed", fmt.Sprintf("no VPN endpoint passed the probe: %v", lastErr))
+		return nil
+	}
+	sort.Slice(measured, func(i, j int) bool { return measured[i].latency < measured[j].latency })
+	var chosen *measuredEndpoint
+	for i := range measured {
+		choice := &measured[i]
+		if activeEndpoint == choice.endpointIP {
+			chosen = choice
+			break
+		}
+		if err = em.docker.CreateSingBoxContainer(ctx, exit.Name, choice.config); err != nil {
+			lastErr = err
+			activeEndpoint = ""
+			continue
+		}
+		activeEndpoint = choice.endpointIP
+		ip, probeErr := probeProviderPublicIPFor(ctx, exit.Name, 40*time.Second)
+		if probeErr != nil {
+			lastErr = probeErr
+			continue
+		}
+		choice.publicIP = ip
+		chosen = choice
+		break
+	}
+	if chosen == nil {
+		exit.Status, exit.PublicIP = "unhealthy", ""
+		if dbErr := db.DB.Model(exit).Updates(map[string]any{"status": exit.Status, "public_ip": ""}).Error; dbErr != nil {
+			return dbErr
+		}
+		em.logEvent(exit.ID, "start", "failed", fmt.Sprintf("measured endpoints could not reconnect: %v", lastErr))
+		return nil
+	}
+	exit.Status, exit.PublicIP, exit.EndpointIP = "running", chosen.publicIP, chosen.endpointIP
+	if err := db.DB.Model(exit).Updates(map[string]any{"status": exit.Status, "public_ip": chosen.publicIP, "endpoint_ip": chosen.endpointIP}).Error; err != nil {
+		return err
+	}
+	em.logEvent(exit.ID, "start", "success", fmt.Sprintf("VPN connected; endpoint %s; public IP %s; probe %s", chosen.endpointIP, chosen.publicIP, chosen.latency.Round(time.Millisecond)))
 	return nil
 }
 

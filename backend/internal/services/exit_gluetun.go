@@ -60,7 +60,11 @@ func (em *ExitManager) createAndStartProvider(exit *models.Exit) error {
 // Provider tunnels may need time to establish DNS and routes before the
 // public-IP probe can succeed.
 func probeProviderPublicIP(ctx context.Context, name string) (string, error) {
-	deadline := time.NewTimer(90 * time.Second)
+	return probeProviderPublicIPFor(ctx, name, 90*time.Second)
+}
+
+func probeProviderPublicIPFor(ctx context.Context, name string, timeout time.Duration) (string, error) {
+	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	var lastErr error
 	for {
@@ -73,7 +77,7 @@ func probeProviderPublicIP(ctx context.Context, name string) (string, error) {
 		case <-ctx.Done():
 			return "", fmt.Errorf("VPN probe stopped: %w", ctx.Err())
 		case <-deadline.C:
-			return "", fmt.Errorf("VPN probe did not succeed within 90 seconds: %w", lastErr)
+			return "", fmt.Errorf("VPN probe did not succeed within %s: %w", timeout, lastErr)
 		case <-time.After(3 * time.Second):
 		}
 	}

@@ -597,7 +597,7 @@ func exitRuntimeConfigChanged(before, after *models.Exit) bool {
 	if before.Provider != after.Provider {
 		return true
 	}
-	if before.Country != after.Country {
+	if before.Country != after.Country && (before.Runtime != "sing-box" || after.Runtime != "sing-box" || before.City == "" || after.City == "") {
 		return true
 	}
 	if before.City != after.City {

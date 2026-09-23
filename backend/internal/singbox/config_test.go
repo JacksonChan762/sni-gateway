@@ -86,6 +86,22 @@ func TestAutomaticServerChangesWireguardEndpoint(t *testing.T) {
 	if peer["address"] == "203.0.113.10" || peer["public_key"] == "" {
 		t.Fatalf("catalog server not applied: %+v", peer)
 	}
+	candidates, err := catalog.Candidates("protonvpn", "wireguard", "United States", "New York")
+	if err != nil || len(candidates) < 2 {
+		t.Fatalf("need multiple WireGuard endpoints: %v", err)
+	}
+	exit.EndpointIP = candidates[1].IP
+	built, err = BuildExitConfig(exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(built, &config); err != nil {
+		t.Fatal(err)
+	}
+	peer = config["endpoints"].([]any)[0].(map[string]any)["peers"].([]any)[0].(map[string]any)
+	if peer["address"] != exit.EndpointIP {
+		t.Fatalf("selected WireGuard endpoint ignored: %+v", peer)
+	}
 }
 
 func TestProviderWireGuardNeedsOnlyProviderCredentials(t *testing.T) {
@@ -131,6 +147,22 @@ func TestAutomaticServerChangesOpenVPNRemote(t *testing.T) {
 	remote := config["endpoints"].([]any)[0].(map[string]any)["servers"].([]any)[0].(map[string]any)
 	if remote["server"] == "203.0.113.10" || remote["server_port"] != float64(1194) {
 		t.Fatalf("catalog remote not applied: %+v", remote)
+	}
+	candidates, err := catalog.Candidates("protonvpn", "openvpn", "Afghanistan", "Kabul", "udp")
+	if err != nil || len(candidates) < 2 {
+		t.Fatalf("need multiple OpenVPN endpoints: %v", err)
+	}
+	exit.EndpointIP = candidates[1].IP
+	built, err = BuildExitConfig(exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(built, &config); err != nil {
+		t.Fatal(err)
+	}
+	remote = config["endpoints"].([]any)[0].(map[string]any)["servers"].([]any)[0].(map[string]any)
+	if remote["server"] != exit.EndpointIP {
+		t.Fatalf("selected OpenVPN endpoint ignored: %+v", remote)
 	}
 }
 
