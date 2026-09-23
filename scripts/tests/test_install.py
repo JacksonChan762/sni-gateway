@@ -23,7 +23,7 @@ class InstallTests(unittest.TestCase):
         fake_docker = binaries / 'docker'
         fake_docker.write_text('''#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
-if [[ "$*" == 'compose up -d --build --wait --wait-timeout 180' && "${FAIL_UP:-}" == 1 ]]; then exit 1; fi
+if [[ "$*" == 'compose up -d --build --remove-orphans --wait --wait-timeout 180' && "${FAIL_UP:-}" == 1 ]]; then exit 1; fi
 ''')
         fake_docker.chmod(0o755)
         self.log = self.root / 'docker.log'
@@ -43,10 +43,15 @@ if [[ "$*" == 'compose up -d --build --wait --wait-timeout 180' && "${FAIL_UP:-}
         self.assertRegex(content, r'JWT_SECRET=[0-9a-f]{64}\n')
         self.assertRegex(content, r'ADMIN_PASSWORD=[0-9a-f]{48}\n')
         self.assertNotIn(content.split('ADMIN_PASSWORD=')[1].splitlines()[0], result.stdout)
-        self.assertEqual(self.log.read_text().splitlines(), [
+        calls = self.log.read_text().splitlines()
+        self.assertEqual(calls[:4], [
             'compose version', 'compose config --quiet',
-            'compose up -d --build --wait --wait-timeout 180',
+            'image inspect ghcr.io/sagernet/sing-box:v1.14.1',
+            'compose up -d --build --remove-orphans --wait --wait-timeout 180',
         ])
+        self.assertEqual(len(calls), 6)
+        self.assertIn('SELECT name FROM exits', calls[4])
+        self.assertIn('UPDATE exits SET status', calls[5])
 
     def test_existing_credentials_are_preserved(self):
         content = 'JWT_SECRET=' + 'x' * 40 + '\nADMIN_PASSWORD=' + 'y' * 20 + '\n'
