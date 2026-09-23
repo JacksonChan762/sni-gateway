@@ -32,9 +32,20 @@ func (em *ExitManager) createAndStartSingBox(exit *models.Exit) error {
 		em.logEvent(exit.ID, "start", "failed", err.Error())
 		return err
 	}
-	em.updateStatus(exit, "running")
-	em.logEvent(exit.ID, "start", "success", "sing-box started")
-	go em.refreshSingBoxPublicIP(exit.ID, exit.Name)
+	ip, err := probeSingBoxPublicIP(exit.Name)
+	if err != nil {
+		exit.Status, exit.PublicIP = "unhealthy", ""
+		if dbErr := db.DB.Model(exit).Updates(map[string]any{"status": exit.Status, "public_ip": ""}).Error; dbErr != nil {
+			return dbErr
+		}
+		em.logEvent(exit.ID, "start", "failed", "sing-box started but VPN probe failed: "+err.Error())
+		return nil
+	}
+	exit.Status, exit.PublicIP = "running", ip
+	if err := db.DB.Model(exit).Updates(map[string]any{"status": exit.Status, "public_ip": ip}).Error; err != nil {
+		return err
+	}
+	em.logEvent(exit.ID, "start", "success", "VPN connected; public IP "+ip)
 	return nil
 }
 
@@ -123,14 +134,6 @@ func (em *ExitManager) getSingBoxStatus(exit *models.Exit) (string, string, erro
 		return status, ip, err
 	}
 	return status, ip, nil
-}
-
-func (em *ExitManager) refreshSingBoxPublicIP(id uint, name string) {
-	ip, err := probeSingBoxPublicIP(name)
-	if err != nil {
-		return
-	}
-	db.DB.Model(&models.Exit{}).Where("id = ? AND status = ?", id, "running").Update("public_ip", ip)
 }
 
 func probeSingBoxPublicIP(name string) (string, error) {

@@ -26,7 +26,7 @@ For an existing checkout, back up the database before switching branches. The up
 
 ## Use
 
-1. Open **Exits** and create an exit. Import a provider WireGuard `.conf` or OpenVPN `.ovpn` file, or enter WireGuard connection fields manually. For WireGuard, the interface address must use CIDR notation, such as `10.2.0.2/32`, and the endpoint must be an IP address. For OpenVPN, the `.ovpn` file must contain an inline CA certificate; enter separate credentials if the provider requires them. Choose **Check status** to verify the public IP through the VPN.
+1. Open **Exits** and create an exit. Import a provider WireGuard `.conf` or OpenVPN `.ovpn` file, or enter WireGuard connection fields manually. For WireGuard, the interface address must use CIDR notation, such as `10.2.0.2/32`, and the endpoint must be an IP address. For OpenVPN, the `.ovpn` file must contain an inline CA certificate; enter separate credentials if the provider requires them. The gateway checks the public IP through the VPN when the exit starts. **Running** means that check succeeded; **Unhealthy** means the container started but the VPN check failed. Use **Logs** for details and **Check status** to retry the check.
 2. Add exact or suffix domain rules and select an exit. A rule targeting a legacy exit cannot be published until that exit is edited with a complete WireGuard or OpenVPN configuration.
 3. Open **Publish**, validate and publish the saved rules. New connections use the published table immediately. Rollback restores the previous published table. Subscription syncs can also publish updates.
 4. Point the domain to the gateway host and test a TLS connection. DNS resolution for the destination occurs inside the selected sing-box exit. No direct-route fallback is configured.

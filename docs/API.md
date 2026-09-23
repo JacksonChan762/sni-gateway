@@ -63,6 +63,8 @@ The `config_yaml` import/export format is also accepted. WireGuard uses a `servi
 | `GET /api/exits/:id/logs` | Return sing-box logs |
 | `GET /api/exits/:id/config` | Return configuration including secrets; handle carefully |
 
+Starting an exit probes its public IP through the sing-box SOCKS listener. A successful probe records `status: "running"` and `public_ip`; a failed probe preserves the exit as `status: "unhealthy"` so its logs can be inspected and the connection retried. `POST /api/exits/:id/start` and `/restart` return the resulting status and public IP.
+
 Older Gluetun exits remain in the database during migration. Edit one with a complete WireGuard or OpenVPN configuration to convert it to sing-box. The API rejects attempts to start a legacy exit before conversion.
 
 ## Rules and subscriptions

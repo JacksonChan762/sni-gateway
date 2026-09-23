@@ -928,7 +928,11 @@ func (h *ExitHandler) Start(c *fiber.Ctx) error {
 	if err := h.manager.Start(exit); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
-	return c.JSON(fiber.Map{"message": "started"})
+	message := "connected"
+	if exit.Status != "running" {
+		message = "VPN connection not ready"
+	}
+	return c.JSON(fiber.Map{"message": message, "status": exit.Status, "public_ip": exit.PublicIP})
 }
 
 func (h *ExitHandler) Stop(c *fiber.Ctx) error {
@@ -953,7 +957,11 @@ func (h *ExitHandler) Restart(c *fiber.Ctx) error {
 	if err := h.manager.Restart(exit); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
-	return c.JSON(fiber.Map{"message": "restarted"})
+	message := "reconnected"
+	if exit.Status != "running" {
+		message = "VPN connection not ready"
+	}
+	return c.JSON(fiber.Map{"message": message, "status": exit.Status, "public_ip": exit.PublicIP})
 }
 
 func (h *ExitHandler) Test(c *fiber.Ctx) error {

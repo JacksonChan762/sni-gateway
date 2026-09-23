@@ -111,9 +111,9 @@ export const createExit = (data: Partial<Exit> & { config_yaml?: string; wiregua
 export const updateExit = (id: number, data: Partial<Exit> & { config_yaml?: string; openvpn_user?: string; openvpn_password?: string; openvpn_profile?: string }) =>
   api.put<Exit>(`/exits/${id}`, data).then(r => r.data)
 export const deleteExit = (id: number) => api.delete(`/exits/${id}`).then(r => r.data)
-export const startExit = (id: number) => api.post(`/exits/${id}/start`).then(r => r.data)
+export const startExit = (id: number) => api.post<{ status: string; public_ip: string }>(`/exits/${id}/start`).then(r => r.data)
 export const stopExit = (id: number) => api.post(`/exits/${id}/stop`).then(r => r.data)
-export const restartExit = (id: number) => api.post(`/exits/${id}/restart`).then(r => r.data)
+export const restartExit = (id: number) => api.post<{ status: string; public_ip: string }>(`/exits/${id}/restart`).then(r => r.data)
 export const testExit = (id: number) => api.post(`/exits/${id}/test`).then(r => r.data)
 export const getExitConfig = (id: number) =>
   api.get<{ config_yaml: string; protocol: string; openvpn_profile: string; openvpn_user: string; openvpn_password: string }>(`/exits/${id}/config`).then(r => r.data)

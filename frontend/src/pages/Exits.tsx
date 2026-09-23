@@ -263,17 +263,23 @@ export default function Exits() {
 
   const createMut = useMutation({
     mutationFn: createExit,
-    onSuccess: async () => { await invalidate(); setShowForm(false); toast.success('Exit created successfully') },
+    onSuccess: async result => {
+      await invalidate()
+      setShowForm(false)
+      if (result.status === 'unhealthy') toast.error('Exit saved, but VPN connection failed. Check its logs and retry.')
+      else toast.success(result.status === 'running' ? `VPN connected (${result.public_ip})` : 'Exit created')
+    },
     onError: err => toast.error(getApiError(err)),
   })
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: number; data: { name: string; enabled: boolean; protocol?: string; config_yaml?: string; openvpn_profile?: string; openvpn_user?: string; openvpn_password?: string } }) =>
       updateExit(id, data),
-    onSuccess: async (_, vars) => {
+    onSuccess: async (result, vars) => {
       qc.removeQueries({ queryKey: ['exit-config', vars.id] })
       await invalidate()
       setEditExit(null)
-      toast.success('Exit updated')
+      if (result.status === 'unhealthy') toast.error('Exit updated, but VPN connection failed. Check its logs and retry.')
+      else toast.success('Exit updated')
     },
     onError: err => toast.error(getApiError(err)),
   })
@@ -288,7 +294,11 @@ export default function Exits() {
   })
   const startMut = useMutation({
     mutationFn: startExit,
-    onSuccess: async () => { await invalidate(); toast.success('Exit started') },
+    onSuccess: async result => {
+      await invalidate()
+      if (result.status === 'running') toast.success(`VPN connected (${result.public_ip})`)
+      else toast.error('VPN connection failed. Check the exit logs and retry.')
+    },
     onError: err => toast.error(getApiError(err)),
   })
   const stopMut = useMutation({
@@ -299,7 +309,11 @@ export default function Exits() {
   })
   const restartMut = useMutation({
     mutationFn: restartExit,
-    onSuccess: async () => { await invalidate(); toast.success('Exit restarted') },
+    onSuccess: async result => {
+      await invalidate()
+      if (result.status === 'running') toast.success(`VPN connected (${result.public_ip})`)
+      else toast.error('VPN connection failed after restart. Check the exit logs.')
+    },
     onError: err => toast.error(getApiError(err)),
   })
 

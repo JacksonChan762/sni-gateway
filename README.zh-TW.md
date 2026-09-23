@@ -26,7 +26,7 @@
 
 ## 使用方式
 
-1. 到**出口**新增設定，匯入供應商的 WireGuard `.conf` 或 OpenVPN `.ovpn`，也可手動輸入 WireGuard 欄位。WireGuard 介面位址需含 CIDR，例如 `10.2.0.2/32`；端點需為 IP。OpenVPN `.ovpn` 需包含內嵌 CA 憑證，供應商要求帳密時請另行輸入。按「Check status」確認 VPN 公網 IP。
+1. 到**出口**新增設定，匯入供應商的 WireGuard `.conf` 或 OpenVPN `.ovpn`，也可手動輸入 WireGuard 欄位。WireGuard 介面位址需含 CIDR，例如 `10.2.0.2/32`；端點需為 IP。OpenVPN `.ovpn` 需包含內嵌 CA 憑證，供應商要求帳密時請另行輸入。出口啟動時會透過 VPN 查詢公網 IP；「Running」代表檢查成功，「Unhealthy」代表容器已啟動但 VPN 檢查失敗。可查看「Logs」並按「Check status」重試檢查。
 2. 建立精確或尾碼網域規則並選出口。若規則指向舊出口，必須先補齊 WireGuard 或 OpenVPN 設定才能發布。
 3. 到**發布**頁驗證並發布規則。新連線會立即使用已發布的規則表；回復功能會還原上一版。訂閱同步也能自動發布變更。
 4. 將網域指向閘道主機並測試 TLS。目的網域的 DNS 查詢由選定的 sing-box 出口處理，沒有直接連線的備援路徑。
