@@ -1,12 +1,15 @@
 """Exercise update control flow with real local Git repos and a fake Docker CLI."""
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'sni-gateway.sh'
+SINGBOX_SOURCE = Path(__file__).resolve().parents[2] / 'backend/internal/docker/singbox.go'
+SINGBOX_IMAGE = re.search(r'const SingBoxImage = "([^"]+)"', SINGBOX_SOURCE.read_text()).group(1)
 
 
 class UpdateTests(unittest.TestCase):
@@ -21,6 +24,9 @@ class UpdateTests(unittest.TestCase):
         self.repo = self.root / 'deployment'
         self.run_cmd('git', 'init', '--initial-branch=main', str(self.remote))
         shutil.copy(SCRIPT, self.remote / 'sni-gateway.sh')
+        image_source = self.remote / 'backend/internal/docker/singbox.go'
+        image_source.parent.mkdir(parents=True)
+        shutil.copy(SINGBOX_SOURCE, image_source)
         (self.remote / '.gitignore').write_text('/backups/\n')
         self.run_cmd('git', '-C', str(self.remote), 'add', '.')
         self.run_cmd('git', '-C', str(self.remote), 'commit', '-m', 'initial')
@@ -82,6 +88,18 @@ if [[ "$*" == *'up -d'* && "${FAIL_STEP:-}" == health ]]; then exit 1; fi
         self.assertLess(calls.index('pg_dump'), calls.index('compose build'))
         self.assertEqual(self.update().returncode, 0)
         self.assertEqual(self.log.read_text().count('compose build'), 1)
+
+    def test_update_uses_image_from_new_revision(self):
+        image_source = self.remote / 'backend/internal/docker/singbox.go'
+        image_source.write_text(image_source.read_text().replace(
+            SINGBOX_IMAGE, 'registry.example/sing-box:next'))
+        self.run_cmd('git', '-C', str(self.remote), 'add', '.')
+        self.run_cmd('git', '-C', str(self.remote), 'commit', '-m', 'update image')
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.log.read_text()
+        self.assertIn('image inspect registry.example/sing-box:next', calls)
+        self.assertNotIn(f'image inspect {SINGBOX_IMAGE}', calls)
 
     def test_backup_failure_does_not_advance_source(self):
         self.advance()

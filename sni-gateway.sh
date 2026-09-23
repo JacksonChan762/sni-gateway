@@ -2,10 +2,37 @@
 # Install or update a Compose deployment of SNI Gateway.
 set -Eeuo pipefail
 
+# The backend creates VPN containers from this image. Keep the installer and
+# updater on the same revision without maintaining a second pinned tag here.
+singbox_image() {
+  local line image=''
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*const[[:space:]]+SingBoxImage[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
+      image="${BASH_REMATCH[1]}"
+      break
+    fi
+  done < backend/internal/docker/singbox.go
+  if [[ -z "$image" ]]; then
+    echo "Cannot find the sing-box image in backend/internal/docker/singbox.go." >&2
+    return 1
+  fi
+  printf '%s\n' "$image"
+}
+
+prepare_singbox_image() {
+  local image
+  image="$(singbox_image)" || return
+  docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image"
+}
+
+require_docker_compose() {
+  command -v docker >/dev/null || { echo "Docker is required." >&2; return 1; }
+  docker compose version >/dev/null || { echo "Docker Compose v2 is required." >&2; return 1; }
+}
+
 # Keep the update function parsed before Git can replace this file on disk.
 install_stack() {
-  command -v docker >/dev/null || { echo "Docker is required." >&2; exit 1; }
-  docker compose version >/dev/null || { echo "Docker Compose v2 is required." >&2; exit 1; }
+  require_docker_compose
 
   local temp_env='' jwt_secret admin_password
   umask 077
@@ -51,7 +78,7 @@ install_stack() {
   docker compose config --quiet
   echo "Building and starting services; this may take a few minutes..."
   trap 'echo "Installation did not complete. Check: docker compose ps; docker compose logs --tail=100" >&2' ERR
-  docker image inspect ghcr.io/sagernet/sing-box:v1.14.1 >/dev/null 2>&1 || docker pull ghcr.io/sagernet/sing-box:v1.14.1
+  prepare_singbox_image
   docker compose up -d --build --remove-orphans --wait --wait-timeout 180
   stop_legacy_exits
   trap - EXIT
@@ -91,8 +118,7 @@ update_stack() {
     [[ "$current" == "$target" ]] && echo "Source is up to date." || echo "Update available. Run: ./sni-gateway.sh update --apply"
     return 0
   fi
-  command -v docker >/dev/null || { echo "Docker is required." >&2; exit 1; }
-  docker compose version >/dev/null
+  require_docker_compose
   state="$(git rev-parse --git-path sni-deployed-revision)"
   if [[ "$current" == "$target" && -f "$state" && "$(cat "$state")" == "$target" ]]; then
     echo "Already deployed this revision."
@@ -106,7 +132,7 @@ update_stack() {
   printf '%s\n' "$current" > "$backup/revision"
   git merge --ff-only "$target"
   docker compose config --quiet
-  docker image inspect ghcr.io/sagernet/sing-box:v1.14.1 >/dev/null 2>&1 || docker pull ghcr.io/sagernet/sing-box:v1.14.1
+  prepare_singbox_image
   docker compose build --pull
   docker compose up -d --remove-orphans --wait --wait-timeout 180
   stop_legacy_exits

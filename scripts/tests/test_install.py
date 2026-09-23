@@ -1,6 +1,7 @@
 """Test the installer without starting real containers."""
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -8,6 +9,8 @@ import unittest
 
 
 INSTALLER = Path(__file__).resolve().parents[2] / 'sni-gateway.sh'
+SINGBOX_SOURCE = Path(__file__).resolve().parents[2] / 'backend/internal/docker/singbox.go'
+SINGBOX_IMAGE = re.search(r'const SingBoxImage = "([^"]+)"', SINGBOX_SOURCE.read_text()).group(1)
 
 
 class InstallTests(unittest.TestCase):
@@ -18,6 +21,9 @@ class InstallTests(unittest.TestCase):
         self.repo = self.root / 'deployment'
         self.repo.mkdir()
         shutil.copy(INSTALLER, self.repo / 'sni-gateway.sh')
+        image_source = self.repo / 'backend/internal/docker/singbox.go'
+        image_source.parent.mkdir(parents=True)
+        shutil.copy(SINGBOX_SOURCE, image_source)
         binaries = self.root / 'bin'
         binaries.mkdir()
         fake_docker = binaries / 'docker'
@@ -46,7 +52,7 @@ if [[ "$*" == 'compose up -d --build --remove-orphans --wait --wait-timeout 180'
         calls = self.log.read_text().splitlines()
         self.assertEqual(calls[:4], [
             'compose version', 'compose config --quiet',
-            'image inspect ghcr.io/sagernet/sing-box:v1.14.1',
+            f'image inspect {SINGBOX_IMAGE}',
             'compose up -d --build --remove-orphans --wait --wait-timeout 180',
         ])
         self.assertEqual(len(calls), 6)
@@ -58,6 +64,23 @@ if [[ "$*" == 'compose up -d --build --remove-orphans --wait --wait-timeout 180'
         (self.repo / '.env').write_text(content)
         self.assertEqual(self.install().returncode, 0)
         self.assertEqual((self.repo / '.env').read_text(), content)
+
+    def test_install_uses_image_from_backend_source(self):
+        image_source = self.repo / 'backend/internal/docker/singbox.go'
+        image_source.write_text(image_source.read_text().replace(
+            SINGBOX_IMAGE, 'registry.example/sing-box:test'))
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.log.read_text()
+        self.assertIn('image inspect registry.example/sing-box:test', calls)
+        self.assertNotIn(f'image inspect {SINGBOX_IMAGE}', calls)
+
+    def test_install_fails_when_image_source_is_missing(self):
+        (self.repo / 'backend/internal/docker/singbox.go').unlink()
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('singbox.go', result.stderr)
+        self.assertNotIn('compose up', self.log.read_text())
 
     def test_example_credentials_are_rejected(self):
         (self.repo / '.env').write_text('JWT_SECRET=replace-with-a-long-random-secret\nADMIN_PASSWORD=admin\n')
