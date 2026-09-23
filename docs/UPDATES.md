@@ -12,20 +12,20 @@ appropriate for your deployment. It refuses local changes, untracked files, deta
 and diverged or locally ahead branches. Keep `.env` in the checkout (it is Git-ignored).
 
 Requirements: Bash, Git, `flock`, Docker and Docker Compose v2 supporting `up --wait`.
-The stack must already be running, including PostgreSQL (start it with `./install.sh`). The account running the update
+The stack must already be running, including PostgreSQL (start it with `./sni-gateway.sh install`). The account running the update
 needs Docker access and noninteractive Git read access. Docker now builds the frontend
 from source; Node.js is not required on the host.
 
 Check for new source without rebuilding or restarting services:
 
 ```bash
-./update.sh --check
+./sni-gateway.sh update --check
 ```
 
 Apply an update:
 
 ```bash
-./update.sh --apply
+./sni-gateway.sh update --apply
 ```
 
 The updater locks out concurrent runs, fetches the configured upstream, saves a
@@ -73,7 +73,7 @@ restoring a dump would discard later changes.
 1. Disable the timer and inspect the service logs.
 2. Locate the last backup's `revision` and completed `database.dump`; a `.partial` file
    is not a completed backup. Preserve `.env` and the named Docker volumes.
-3. For a transient network/build failure, rerun `./update.sh --apply`.
+3. For a transient network/build failure, rerun `./sni-gateway.sh update --apply`.
 4. For a code regression, review schema compatibility before deploying the recorded
    previous revision from a separate checkout. Use the same Compose project name and
    `.env` to address the existing volumes. Do not run `docker compose down -v`.

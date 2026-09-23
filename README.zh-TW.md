@@ -64,7 +64,7 @@ SNI Gateway 是一個透過網頁介面管理的 TLS SNI 流量路由閘道器�
 在此專案目錄安裝並啟動服務：
 
 ```bash
-./install.sh
+./sni-gateway.sh install
 ```
 
 如果沒有 `.env`，安裝腳本會產生隨機登入憑證；已有 `.env` 時會保留原設定。腳本會檢查 Compose 設定，並等待服務健康檢查通過。登入密碼請查看 `.env` 中的 `ADMIN_PASSWORD`，並妥善保護此檔案。如需自訂帳密，可先將 `.env.example` 複製為 `.env`，替換範例密鑰及密碼後再執行安裝。
@@ -314,8 +314,8 @@ npm run build
 - Docker 會直接從原始碼建置前端，更新時不需在主機安裝 Node.js。
 
 ```bash
-./update.sh --check
-./update.sh --apply
+./sni-gateway.sh update --check
+./sni-gateway.sh update --apply
 ```
 
 更新腳本需要乾淨、追蹤遠端分支的部署目錄，以及正在運行的 PostgreSQL 服務；套用更新前會先備份資料庫。詳見[更新指南](docs/UPDATES.md)。

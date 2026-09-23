@@ -8,6 +8,6 @@ Requires=docker.service
 Type=oneshot
 # Change this path to your dedicated deployment checkout.
 WorkingDirectory=/opt/sni-gateway
-ExecStart=/usr/bin/bash /opt/sni-gateway/scripts/update.sh --apply
+ExecStart=/usr/bin/bash /opt/sni-gateway/sni-gateway.sh update --apply
 UMask=0077
 TimeoutStartSec=30min

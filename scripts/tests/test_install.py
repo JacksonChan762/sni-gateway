@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 
-INSTALLER = Path(__file__).resolve().parents[2] / 'install.sh'
+INSTALLER = Path(__file__).resolve().parents[2] / 'sni-gateway.sh'
 
 
 class InstallTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class InstallTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.repo = self.root / 'deployment'
         self.repo.mkdir()
-        shutil.copy(INSTALLER, self.repo / 'install.sh')
+        shutil.copy(INSTALLER, self.repo / 'sni-gateway.sh')
         binaries = self.root / 'bin'
         binaries.mkdir()
         fake_docker = binaries / 'docker'
@@ -31,7 +31,7 @@ if [[ "$*" == 'compose up -d --build --wait --wait-timeout 180' && "${FAIL_UP:-}
                         DOCKER_LOG=str(self.log))
 
     def install(self, *args):
-        return subprocess.run(['bash', 'install.sh', *args], cwd=self.repo,
+        return subprocess.run(['bash', 'sni-gateway.sh', 'install', *args], cwd=self.repo,
                               env=self.env, text=True, capture_output=True)
 
     def test_first_install_creates_private_credentials_and_waits(self):

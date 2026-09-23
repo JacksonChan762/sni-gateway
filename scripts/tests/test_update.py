@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'update.sh'
+SCRIPT = Path(__file__).resolve().parents[2] / 'sni-gateway.sh'
 
 
 class UpdateTests(unittest.TestCase):
@@ -20,8 +20,7 @@ class UpdateTests(unittest.TestCase):
         self.remote = self.root / 'remote'
         self.repo = self.root / 'deployment'
         self.run_cmd('git', 'init', '--initial-branch=main', str(self.remote))
-        (self.remote / 'scripts').mkdir()
-        shutil.copy(SCRIPT, self.remote / 'scripts/update.sh')
+        shutil.copy(SCRIPT, self.remote / 'sni-gateway.sh')
         (self.remote / '.gitignore').write_text('/backups/\n')
         self.run_cmd('git', '-C', str(self.remote), 'add', '.')
         self.run_cmd('git', '-C', str(self.remote), 'commit', '-m', 'initial')
@@ -46,7 +45,7 @@ if [[ "$*" == *'up -d'* && "${FAIL_STEP:-}" == health ]]; then exit 1; fi
         return subprocess.run(args, env=self.env, text=True, capture_output=True, check=True)
 
     def update(self, mode='--apply'):
-        return subprocess.run(['bash', 'scripts/update.sh', mode], cwd=self.repo,
+        return subprocess.run(['bash', 'sni-gateway.sh', 'update', mode], cwd=self.repo,
                               env=self.env, text=True, capture_output=True)
 
     def advance(self):

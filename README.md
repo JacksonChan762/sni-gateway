@@ -64,7 +64,7 @@ The installer generates a strong JWT secret and admin password. OpenSSL is requi
 Install and start the stack from this checkout:
 
 ```bash
-./install.sh
+./sni-gateway.sh install
 ```
 
 The installer creates `.env` with random credentials if it does not exist, keeps an existing `.env`, checks the Compose configuration, and waits for healthy services. Read `ADMIN_PASSWORD` from `.env` to sign in. Keep that file private. If you prefer your own credentials, copy `.env.example` to `.env` and replace the example secrets before running the installer.
@@ -113,8 +113,8 @@ Enabled exits whose recorded status is running are restarted every 12 hours by d
 - **Subscriptions:** enabled lists sync on their configured schedule and automatically publish routing changes.
 
 ```bash
-./update.sh --check
-./update.sh --apply
+./sni-gateway.sh update --check
+./sni-gateway.sh update --apply
 ```
 
 The updater needs a clean deployment checkout on a branch tracking an upstream and a running PostgreSQL service. It backs up the database before applying an update. See [update setup and recovery](docs/UPDATES.md).
