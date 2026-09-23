@@ -1,6 +1,6 @@
 # SNI Gateway
 
-[v1.1.2 Beta — What’s Updated (English / 繁體中文)](docs/releases/v1.1.2-beta.md) · [v1.1 Beta notes](docs/releases/v1.1-beta.md)
+[v1.1 stable release notes](docs/releases/v1.1.md) · [v1.1.2 beta preview](docs/releases/v1.1.2-beta.md)
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 

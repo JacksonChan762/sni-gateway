@@ -1,6 +1,6 @@
 # SNI Gateway
 
-[v1.1.2 Beta 更新說明（繁體中文／English）](docs/releases/v1.1.2-beta.md) · [v1.1 Beta 更新紀錄](docs/releases/v1.1-beta.md)
+[v1.1 正式版更新說明](docs/releases/v1.1.md) · [v1.1.2 beta 預覽](docs/releases/v1.1.2-beta.md)
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
