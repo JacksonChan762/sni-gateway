@@ -40,7 +40,7 @@ func (em *ExitManager) createAndStartProvider(exit *models.Exit) error {
 		em.logEvent(exit.ID, "start", "failed", err.Error())
 		return err
 	}
-	ip, err := probeSingBoxPublicIP(exit.Name)
+	ip, err := probeProviderPublicIP(ctx, exit.Name)
 	if err != nil {
 		exit.Status, exit.PublicIP = "unhealthy", ""
 		if dbErr := db.DB.Model(exit).Updates(map[string]any{"status": exit.Status, "public_ip": ""}).Error; dbErr != nil {
@@ -55,6 +55,28 @@ func (em *ExitManager) createAndStartProvider(exit *models.Exit) error {
 	}
 	em.logEvent(exit.ID, "start", "success", "VPN connected; public IP "+ip)
 	return nil
+}
+
+// Gluetun starts its DNS resolver after the VPN interface. Give the resolver
+// and tunnel time to become usable before recording the exit as unhealthy.
+func probeProviderPublicIP(ctx context.Context, name string) (string, error) {
+	deadline := time.NewTimer(90 * time.Second)
+	defer deadline.Stop()
+	var lastErr error
+	for {
+		ip, err := probeSingBoxPublicIP(name)
+		if err == nil {
+			return ip, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("VPN probe stopped: %w", ctx.Err())
+		case <-deadline.C:
+			return "", fmt.Errorf("VPN probe did not succeed within 90 seconds: %w", lastErr)
+		case <-time.After(3 * time.Second):
+		}
+	}
 }
 
 func (em *ExitManager) removeProviderContainers(ctx context.Context, name string) error {
