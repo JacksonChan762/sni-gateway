@@ -1,10 +1,12 @@
 package api
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
 	"sni-gateway/internal/models"
+	"sni-gateway/internal/singbox"
 )
 
 func TestBuildExitConfigYAMLPreservesStoredEnvironment(t *testing.T) {
@@ -68,18 +70,42 @@ func TestValidateExitRequestRequiresCustomWireguardFields(t *testing.T) {
 }
 
 func TestValidateExitRequestAcceptsCustomWireguardFields(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	err := validateExitRequest(CreateExitRequest{
 		Protocol:              "wireguard",
 		Provider:              "custom",
 		WireguardEndpointIP:   "203.0.113.10",
 		WireguardEndpointPort: "51820",
-		WireguardPublicKey:    "public",
-		WireguardPrivKey:      "private",
+		WireguardPublicKey:    key,
+		WireguardPrivKey:      key,
 		WireguardAddresses:    "10.64.222.21/32",
 		WireguardDNS:          "1.1.1.1,8.8.8.8:53",
 	})
 	if err != nil {
 		t.Fatalf("validateExitRequest returned error: %v", err)
+	}
+}
+
+func TestValidateExitRequestRejectsProviderOnlyAndOpenVPN(t *testing.T) {
+	if err := validateExitRequest(CreateExitRequest{Protocol: "wireguard", Provider: "protonvpn", WireguardPrivKey: "key"}); err == nil || !strings.Contains(err.Error(), "wireguard_endpoint_ip") {
+		t.Fatalf("provider-only exit accepted: %v", err)
+	}
+	if err := validateExitRequest(CreateExitRequest{Protocol: "openvpn", OpenVPNUser: "user", OpenVPNPassword: "pass"}); err == nil || !strings.Contains(err.Error(), "WireGuard") {
+		t.Fatalf("OpenVPN credentials accepted: %v", err)
+	}
+}
+
+func TestNormalizeLegacyWireguardEnvironmentForSingBox(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	exit := models.Exit{Protocol: "wireguard", ConfigJSON: `{"services":{"gluetun":{"environment":["WIREGUARD_PRIVATE_KEY=` + key + `","WIREGUARD_PUBLIC_KEY=` + key + `","WIREGUARD_ENDPOINT_IP=203.0.113.10","WIREGUARD_ENDPOINT_PORT=51820","WIREGUARD_ADDRESSES=10.2.0.2/32"]}}}`}
+	if err := normalizeExitConfig(&exit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := singbox.BuildExitConfig(exit); err != nil {
+		t.Fatalf("normalized config is unusable: %v", err)
+	}
+	if strings.Contains(exit.ConfigJSON, "services") {
+		t.Fatal("legacy Compose block retained")
 	}
 }
 

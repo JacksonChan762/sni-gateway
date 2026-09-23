@@ -79,6 +79,15 @@ func (t *RoutingTable) Match(host string) *models.Rule {
 	return preferredRule(t.exact[host], t.matchSuffix(host))
 }
 
+// ExitName returns the published exit for a host, if any.
+func (t *RoutingTable) ExitName(host string) string {
+	rule := t.Match(host)
+	if rule == nil || rule.ExitID == nil {
+		return ""
+	}
+	return t.exits[*rule.ExitID].Name
+}
+
 func (t *RoutingTable) MapLines() []string {
 	domains := make(map[string]struct{}, len(t.exact)+len(t.suffix))
 	for host := range t.exact {

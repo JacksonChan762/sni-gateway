@@ -59,6 +59,9 @@ func (em *ExitManager) ReconcileAfterUpdate(before, after *models.Exit) error {
 	if before == nil || after == nil {
 		return nil
 	}
+	if after.Runtime == "sing-box" {
+		return em.reconcileSingBox(before, after)
+	}
 	defer em.lockExit(after.ID)()
 
 	runtimeChanged := exitRuntimeConfigChanged(before, after)
@@ -113,6 +116,9 @@ func (em *ExitManager) ReconcileAfterUpdate(before, after *models.Exit) error {
 }
 
 func (em *ExitManager) createAndStart(exit *models.Exit) error {
+	if exit.Runtime == "sing-box" {
+		return em.createAndStartSingBox(exit)
+	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.updateStatus(exit, "unhealthy")
 		em.logEvent(exit.ID, "create", "failed", err.Error())
@@ -185,6 +191,9 @@ func (em *ExitManager) createAndStart(exit *models.Exit) error {
 }
 
 func (em *ExitManager) start(exit *models.Exit) error {
+	if exit.Runtime == "sing-box" {
+		return em.createAndStartSingBox(exit)
+	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.logEvent(exit.ID, "start", "failed", err.Error())
 		return err
@@ -269,6 +278,9 @@ func (em *ExitManager) Stop(exit *models.Exit) error {
 }
 
 func (em *ExitManager) restart(exit *models.Exit) error {
+	if exit.Runtime == "sing-box" {
+		return em.createAndStartSingBox(exit)
+	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.logEvent(exit.ID, "restart", "failed", err.Error())
 		return err
@@ -378,6 +390,9 @@ func (em *ExitManager) RestartEnabledExits() error {
 }
 
 func (em *ExitManager) delete(exit *models.Exit) error {
+	if exit.Runtime == "sing-box" {
+		return em.deleteSingBox(exit)
+	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		em.logEvent(exit.ID, "delete", "failed", err.Error())
 		return err
@@ -398,6 +413,9 @@ func (em *ExitManager) delete(exit *models.Exit) error {
 
 func (em *ExitManager) GetStatus(exit *models.Exit) (string, string, error) {
 	defer em.lockExit(exit.ID)()
+	if exit.Runtime == "sing-box" {
+		return em.getSingBoxStatus(exit)
+	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		return "unavailable", "", err
 	}
@@ -443,6 +461,9 @@ func (em *ExitManager) GetStatus(exit *models.Exit) (string, string, error) {
 }
 
 func (em *ExitManager) GetLogs(exit *models.Exit, tail int) (string, error) {
+	if exit.Runtime == "sing-box" {
+		return em.getSingBoxLogs(exit, tail)
+	}
 	if err := em.ensureDockerAvailable(); err != nil {
 		return "", err
 	}
@@ -570,16 +591,25 @@ func changedRuntimeNames(beforeName, afterName string) []string {
 }
 
 func (em *ExitManager) CreateAndStart(exit *models.Exit) error {
+	if exit.Runtime != "sing-box" {
+		return errors.New("legacy exit: edit it with a complete WireGuard configuration before starting")
+	}
 	defer em.lockExit(exit.ID)()
 	return em.createAndStart(exit)
 }
 
 func (em *ExitManager) Start(exit *models.Exit) error {
+	if exit.Runtime != "sing-box" {
+		return errors.New("legacy exit: edit it with a complete WireGuard configuration before starting")
+	}
 	defer em.lockExit(exit.ID)()
 	return em.start(exit)
 }
 
 func (em *ExitManager) Restart(exit *models.Exit) error {
+	if exit.Runtime != "sing-box" {
+		return errors.New("legacy exit: edit it with a complete WireGuard configuration before starting")
+	}
 	defer em.lockExit(exit.ID)()
 	return em.restart(exit)
 }

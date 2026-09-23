@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/models"
 	"sni-gateway/internal/services"
+	"sni-gateway/internal/singbox"
 
 	"github.com/gofiber/fiber/v2"
 	"gopkg.in/yaml.v3"
@@ -56,6 +58,8 @@ type CreateExitRequest struct {
 	Enabled               *bool  `json:"enabled"`
 }
 
+var exitNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
+
 func (h *ExitHandler) Create(c *fiber.Ctx) error {
 	var req CreateExitRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -75,14 +79,14 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 		}
 	}
 
-	if req.Name == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	if !exitNamePattern.MatchString(req.Name) {
+		return c.Status(400).JSON(fiber.Map{"error": "name must be 1–63 letters, numbers, hyphens, or underscores"})
 	}
 	if req.Protocol == "" {
 		req.Protocol = "wireguard"
 	}
 	if req.Provider == "" {
-		req.Provider = "protonvpn"
+		req.Provider = "custom"
 	}
 	if req.Protocol != "wireguard" && req.Protocol != "openvpn" {
 		return c.Status(400).JSON(fiber.Map{"error": "protocol must be wireguard or openvpn"})
@@ -97,7 +101,10 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 	}
 	runtime := req.Runtime
 	if runtime == "" {
-		runtime = "gluetun"
+		runtime = "sing-box"
+	}
+	if runtime != "sing-box" {
+		return c.Status(400).JSON(fiber.Map{"error": "runtime must be sing-box"})
 	}
 
 	configJSON, err := buildExitConfigJSON(req)
@@ -115,6 +122,9 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 		Enabled:    enabled,
 		Status:     "stopped",
 		ConfigJSON: configJSON,
+	}
+	if err := normalizeExitConfig(&exit); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 	if err := db.DB.Create(&exit).Error; err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -160,6 +170,9 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	}
 
 	if req.Name != "" {
+		if !exitNamePattern.MatchString(req.Name) {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid exit name"})
+		}
 		exit.Name = req.Name
 	}
 
@@ -168,7 +181,7 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 			req.Protocol = "wireguard"
 		}
 		if req.Provider == "" {
-			req.Provider = "protonvpn"
+			req.Provider = "custom"
 		}
 		exit.Protocol = req.Protocol
 		exit.Provider = req.Provider
@@ -240,6 +253,10 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 	if err := validateExitConfig(&exit); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
+	if err := normalizeExitConfig(&exit); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	exit.Runtime = "sing-box"
 
 	if err := db.DB.Save(&exit).Error; err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -274,12 +291,27 @@ func parseExitCredentials(raw string) map[string]string {
 	if raw == "" {
 		return result
 	}
-	_ = json.Unmarshal([]byte(raw), &result)
+	data := map[string]interface{}{}
+	if json.Unmarshal([]byte(raw), &data) != nil {
+		return result
+	}
+	env := extractStoredComposeEnv(data)
+	for _, pair := range [][2]string{
+		{"WIREGUARD_PRIVATE_KEY", "wireguard_private_key"}, {"WIREGUARD_PUBLIC_KEY", "wireguard_public_key"},
+		{"WIREGUARD_ENDPOINT_IP", "wireguard_endpoint_ip"}, {"WIREGUARD_ENDPOINT_PORT", "wireguard_endpoint_port"},
+		{"WIREGUARD_PRESHARED_KEY", "wireguard_preshared_key"}, {"WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"},
+		{"WIREGUARD_ADDRESSES", "wireguard_addresses"}, {"WIREGUARD_DNS", "wireguard_dns"},
+		{"OPENVPN_USER", "openvpn_user"}, {"OPENVPN_PASSWORD", "openvpn_password"},
+	} {
+		if value := firstConfigValue(env, data, pair[0], pair[1]); value != "" {
+			result[pair[1]] = value
+		}
+	}
 	return result
 }
 
 func validateExitRequest(req CreateExitRequest) error {
-	if req.Protocol == "wireguard" && strings.EqualFold(req.Provider, "custom") {
+	if req.Protocol == "wireguard" {
 		if req.WireguardEndpointIP == "" {
 			return fmt.Errorf("wireguard_endpoint_ip is required for custom wireguard exits")
 		}
@@ -319,15 +351,17 @@ func validateExitRequest(req CreateExitRequest) error {
 		if err := validateWireguardDNS(req.WireguardDNS); err != nil {
 			return err
 		}
+		config, err := buildExitConfigJSON(req)
+		if err != nil {
+			return err
+		}
+		_, err = singbox.BuildExitConfig(models.Exit{Protocol: "wireguard", ConfigJSON: config})
+		if err != nil {
+			return err
+		}
 		return nil
 	}
-	if req.Protocol == "wireguard" && req.WireguardPrivKey == "" {
-		return fmt.Errorf("wireguard_private_key is required for wireguard exits")
-	}
-	if req.Protocol == "openvpn" && (req.OpenVPNUser == "" || req.OpenVPNPassword == "") {
-		return fmt.Errorf("openvpn_user and openvpn_password are required for openvpn exits")
-	}
-	return nil
+	return fmt.Errorf("sing-box currently requires a complete WireGuard configuration; OpenVPN support is not available")
 }
 
 func validateWireguardDNS(value string) error {
@@ -379,6 +413,37 @@ func validateExitConfig(exit *models.Exit) error {
 		OpenVPNPassword:       firstConfigValue(env, raw, "OPENVPN_PASSWORD", "openvpn_password"),
 	}
 	return validateExitRequest(req)
+}
+
+// normalizeExitConfig converts imported Gluetun environment blocks to the
+// explicit fields used by sing-box, discarding obsolete Compose options.
+func normalizeExitConfig(exit *models.Exit) error {
+	raw := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(exit.ConfigJSON), &raw); err != nil {
+		return err
+	}
+	env := extractStoredComposeEnv(raw)
+	fields := map[string]string{}
+	for _, pair := range [][2]string{
+		{"WIREGUARD_PRIVATE_KEY", "wireguard_private_key"},
+		{"WIREGUARD_PUBLIC_KEY", "wireguard_public_key"},
+		{"WIREGUARD_ENDPOINT_IP", "wireguard_endpoint_ip"},
+		{"WIREGUARD_ENDPOINT_PORT", "wireguard_endpoint_port"},
+		{"WIREGUARD_PRESHARED_KEY", "wireguard_preshared_key"},
+		{"WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"},
+		{"WIREGUARD_ADDRESSES", "wireguard_addresses"},
+		{"WIREGUARD_DNS", "wireguard_dns"},
+	} {
+		if value := firstConfigValue(env, raw, pair[0], pair[1]); value != "" {
+			fields[pair[1]] = value
+		}
+	}
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	exit.ConfigJSON = string(data)
+	return nil
 }
 
 func firstConfigValue(env map[string]string, raw map[string]interface{}, envKey, rawKey string) string {
@@ -481,7 +546,7 @@ func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest)
 		return false
 	}
 
-	req.Runtime = "gluetun"
+	req.Runtime = "sing-box"
 
 	if enabled, ok := raw["enabled"].(bool); ok {
 		req.Enabled = &enabled
@@ -653,8 +718,7 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 	compose := map[string]interface{}{
 		"enabled": exit.Enabled,
 		"services": map[string]interface{}{
-			"gluetun": map[string]interface{}{
-				"image":       "qmcgaw/gluetun:latest",
+			"singbox": map[string]interface{}{
 				"environment": orderedEnvironment(envMap, exit.Protocol),
 			},
 		},

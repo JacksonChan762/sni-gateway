@@ -9,6 +9,7 @@ import (
 	"sni-gateway/internal/config"
 	"sni-gateway/internal/db"
 	"sni-gateway/internal/docker"
+	"sni-gateway/internal/gateway"
 	"sni-gateway/internal/services"
 	"syscall"
 	"time"
@@ -43,20 +44,12 @@ func main() {
 
 	exitMgr := services.NewExitManager(dockerClient)
 
-	var reloader services.NginxReloader
-	if dockerClient != nil {
-		reloader = dockerClient
+	cfgGen, err := services.NewRoutePublisher(cfg.RouteSnapshotPath)
+	if err != nil {
+		log.Fatalf("Load published routes: %v", err)
 	}
-	cfgGen := services.NewConfigGenerator(cfg.NginxConfigDir, cfg.NginxPID, reloader)
 	subMgr := services.NewSubscriptionManager(cfgGen)
 	restartScheduler := services.NewExitRestartScheduler(exitMgr, cfg.ExitRestartCron)
-
-	// Write initial sni_map.conf so nginx can start successfully
-	if err := cfgGen.WriteInitial(); err != nil {
-		log.Printf("Warning: could not write initial nginx config: %v", err)
-	} else {
-		log.Println("Initial nginx config written.")
-	}
 
 	subMgr.Start()
 	defer subMgr.Stop()
@@ -70,6 +63,11 @@ func main() {
 
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
+	ingress := &gateway.Server{Router: cfgGen, HTTPAddr: ":80", TLSAddr: ":443"}
+	if err := ingress.Start(ctx); err != nil {
+		log.Fatalf("Start SNI ingress: %v", err)
+	}
+	defer ingress.Close()
 	listenErr := make(chan error, 1)
 	go func() { listenErr <- server.Listen(addr) }()
 	select {

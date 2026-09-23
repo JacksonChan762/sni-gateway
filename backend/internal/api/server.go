@@ -21,7 +21,7 @@ type Server struct {
 	cfg     *config.Config
 }
 
-func NewServer(cfg *config.Config, exitMgr *services.ExitManager, subMgr *services.SubscriptionManager, cfgGen *services.ConfigGenerator) *Server {
+func NewServer(cfg *config.Config, exitMgr *services.ExitManager, subMgr *services.SubscriptionManager, cfgGen services.Publisher) *Server {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

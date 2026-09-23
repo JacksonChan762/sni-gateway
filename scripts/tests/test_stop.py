@@ -20,7 +20,7 @@ with open(os.environ['STOP_TEST_LOG'], 'a') as f:
 if args[:3] == ['compose', 'exec', '-T'] and 'SELECT name FROM exits ORDER BY id' in args:
     print('a\\nb\\nmissing')
 elif args[:3] == ['container', 'ls', '-a']:
-    print('relay-a\\ngluetun-a\\ngluetun-b\\nunrelated\\nrelay-other')
+    print('singbox-a\\nrelay-a\\ngluetun-a\\ngluetun-b\\nunrelated\\nrelay-other')
 elif args[:2] == ['container', 'stop'] and os.environ.get('STOP_TEST_FAIL') == '1':
     sys.exit(1)
 ''')
@@ -35,7 +35,7 @@ elif args[:2] == ['container', 'stop'] and os.environ.get('STOP_TEST_FAIL') == '
     def test_stops_only_managed_pairs_before_stack(self):
         result, calls = self.run_stop()
         self.assertEqual(result.returncode, 0, result.stderr)
-        stop = ['container', 'stop', '--time', '30', 'relay-a', 'gluetun-a', 'gluetun-b']
+        stop = ['container', 'stop', '--time', '30', 'singbox-a', 'relay-a', 'gluetun-a', 'gluetun-b']
         self.assertIn(stop, calls)
         self.assertLess(calls.index(['compose', 'stop', 'backend']), calls.index(stop))
         self.assertEqual(calls[-1], ['compose', 'stop'])

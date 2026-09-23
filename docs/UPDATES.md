@@ -34,9 +34,9 @@ and starts the stack with a 180-second readiness wait. It records the deployed c
 only after success. A failed attempt is retried on the next run even if source already
 advanced. The first run rebuilds once to establish that record.
 
-Compose builds include the current frontend, backend, and relay image. Existing dynamically
-managed VPN exits keep their running images until recreated; this updater does not roll
-those containers. Nginx routing and database volumes are retained. The readiness check
+Compose builds include the current frontend and backend; the installer pulls the pinned official sing-box image. Existing dynamically
+managed sing-box exits keep their running images until restarted in the UI; this updater does not roll
+those containers. Published routes and database volumes are retained. The readiness check
 covers Compose service health, not end-to-end VPN routing; test a routed domain afterward.
 Backups contain private configuration and have restrictive permissions. Copy them to
 secure storage and periodically remove old backups according to your retention policy.
@@ -80,7 +80,7 @@ restoring a dump would discard later changes.
 5. If database restoration is required, stop writers and have an operator restore the
    custom-format dump with `pg_restore` after reviewing the data-loss implications.
 
-The Publish page's rollback restores nginx configuration only; it does not roll back
+The Publish page's rollback restores the previous routing table only; it does not roll back
 application code or database migrations.
 
 ## Development verification

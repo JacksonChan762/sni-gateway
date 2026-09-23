@@ -11,7 +11,7 @@ existing=$(docker container ls -a --format '{{.Names}}')
 containers=()
 while IFS= read -r name; do
   [[ -n "$name" ]] || continue
-  for prefix in relay- gluetun-; do
+  for prefix in singbox- relay- gluetun-; do
     target="${prefix}${name}"
     while IFS= read -r candidate; do
       if [[ "$candidate" == "$target" ]]; then
@@ -35,4 +35,4 @@ if (( failed != 0 )); then
   echo 'Some shutdown operations failed; review the errors above.' >&2
   exit 1
 fi
-echo 'Stack, VPN exits and relays stopped. Settings and volumes retained.'
+echo 'Stack and VPN exits stopped. Settings and volumes retained.'

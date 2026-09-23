@@ -28,7 +28,7 @@ export default function PublishStatusNotice() {
       <AlertCircle size={18} className="text-amber-300 mt-0.5 flex-shrink-0" />
       <div>
         <p className="text-sm font-medium text-amber-100">Saved routes are waiting to be published</p>
-        <p className="text-xs text-amber-200/70 mt-1">These saved changes are not in the nginx configuration yet.</p>
+        <p className="text-xs text-amber-200/70 mt-1">These saved changes are not active yet.</p>
       </div>
     </div>
     <Link to="/publish" className="btn-primary text-xs">Review and publish <ArrowRight size={13} /></Link>

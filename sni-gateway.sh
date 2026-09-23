@@ -51,7 +51,9 @@ install_stack() {
   docker compose config --quiet
   echo "Building and starting services; this may take a few minutes..."
   trap 'echo "Installation did not complete. Check: docker compose ps; docker compose logs --tail=100" >&2' ERR
-  docker compose up -d --build --wait --wait-timeout 180
+  docker image inspect ghcr.io/sagernet/sing-box:v1.14.1 >/dev/null 2>&1 || docker pull ghcr.io/sagernet/sing-box:v1.14.1
+  docker compose up -d --build --remove-orphans --wait --wait-timeout 180
+  stop_legacy_exits
   trap - EXIT
   echo "SNI Gateway is ready at http://127.0.0.1:8080"
   echo "Read ADMIN_PASSWORD from .env to sign in. Keep that file private."
@@ -104,11 +106,27 @@ update_stack() {
   printf '%s\n' "$current" > "$backup/revision"
   git merge --ff-only "$target"
   docker compose config --quiet
+  docker image inspect ghcr.io/sagernet/sing-box:v1.14.1 >/dev/null 2>&1 || docker pull ghcr.io/sagernet/sing-box:v1.14.1
   docker compose build --pull
-  docker compose up -d --wait --wait-timeout 180
+  docker compose up -d --remove-orphans --wait --wait-timeout 180
+  stop_legacy_exits
   printf '%s\n' "$target" > "$state"
   echo "Update complete: $target"
   echo "Database backup: $backup/database.dump"
+}
+
+stop_legacy_exits() {
+  local name prefix legacy_names
+  legacy_names="$(docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U sni -d sni_gateway -Atc "SELECT name FROM exits WHERE runtime IS DISTINCT FROM 'sing-box' ORDER BY id")"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    for prefix in gluetun- relay-; do
+      if docker container inspect "${prefix}${name}" >/dev/null 2>&1; then
+        docker container stop "${prefix}${name}" >/dev/null
+      fi
+    done
+  done <<< "$legacy_names"
+  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U sni -d sni_gateway -c "UPDATE exits SET status = 'stopped', public_ip = '', updated_at = NOW() WHERE runtime IS DISTINCT FROM 'sing-box'" >/dev/null
 }
 
 usage() {

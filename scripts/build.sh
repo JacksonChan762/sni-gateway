@@ -11,11 +11,8 @@ cd ..
 
 echo "==> Building backend..."
 cd backend
-go mod tidy
+mkdir -p ../dist
 go build -o ../dist/sni-gateway ./cmd/server
 cd ..
-
-echo "==> Building relay image..."
-docker build -t sni-gateway-relay:latest ./relay
 
 echo "==> Done. Binary: dist/sni-gateway"

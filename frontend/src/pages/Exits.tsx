@@ -15,17 +15,12 @@ import PublishStatusNotice from '../components/PublishStatusNotice'
 
 // ─── VPN config helpers ───────────────────────────────────────────────────────
 
-const wireguardOrder = [
-  'VPN_SERVICE_PROVIDER', 'VPN_TYPE', 'SERVER_COUNTRIES', 'SERVER_CITIES',
-  'WIREGUARD_PRIVATE_KEY', 'WIREGUARD_ADDRESSES',
-]
 const customWireguardOrder = [
   'VPN_SERVICE_PROVIDER', 'VPN_TYPE',
   'WIREGUARD_ENDPOINT_IP', 'WIREGUARD_ENDPOINT_PORT',
   'WIREGUARD_PUBLIC_KEY', 'WIREGUARD_PRIVATE_KEY',
   'WIREGUARD_PRESHARED_KEY', 'WIREGUARD_ADDRESSES',
-  'WIREGUARD_DNS', 'WIREGUARD_ALLOWED_IPS', 'WIREGUARD_MTU',
-  'WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL',
+  'WIREGUARD_DNS', 'WIREGUARD_ALLOWED_IPS',
 ]
 const openvpnOrder = [
   'VPN_SERVICE_PROVIDER', 'VPN_TYPE', 'SERVER_COUNTRIES', 'SERVER_CITIES',
@@ -44,19 +39,13 @@ const envLabels: Record<string, string> = {
   WIREGUARD_ADDRESSES: 'WireGuard Addresses',
   WIREGUARD_DNS: 'WireGuard DNS',
   WIREGUARD_ALLOWED_IPS: 'WireGuard Allowed IPs',
-  WIREGUARD_MTU: 'WireGuard MTU',
-  WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL: 'WireGuard Keepalive',
   OPENVPN_USER: 'OpenVPN Username',
   OPENVPN_PASSWORD: 'OpenVPN Password',
 }
 
-function isCustomProvider(env: Record<string, string>) {
-  return env.VPN_SERVICE_PROVIDER?.trim().toLowerCase() === 'custom'
-}
-
 function getOrderedEnvKeys(env: Record<string, string>, protocol: 'wireguard' | 'openvpn') {
   if (protocol === 'openvpn') return openvpnOrder
-  return isCustomProvider(env) ? customWireguardOrder : wireguardOrder
+  return customWireguardOrder
 }
 
 function parseEnvYamlBlock(input: string): Record<string, string> {
@@ -115,8 +104,7 @@ function buildComposeYaml(enabled: boolean, environmentYaml: string) {
     .join('\n')
   return `enabled: ${enabled ? 'true' : 'false'}
 services:
-  gluetun:
-    image: qmcgaw/gluetun:latest
+  singbox:
     environment:
 ${envLines}
 `
@@ -127,9 +115,9 @@ function extractEnvironmentBlock(configYaml: string) {
   const envIndex = lines.findIndex(l => l.trim() === 'environment:')
   if (envIndex === -1) {
     return stringifyEnvYamlBlock({
-      VPN_SERVICE_PROVIDER: 'protonvpn', VPN_TYPE: 'wireguard',
-      SERVER_COUNTRIES: 'United States', SERVER_CITIES: '',
-      WIREGUARD_PRIVATE_KEY: '', WIREGUARD_ADDRESSES: '',
+      VPN_SERVICE_PROVIDER: 'custom', VPN_TYPE: 'wireguard',
+      WIREGUARD_ENDPOINT_IP: '', WIREGUARD_ENDPOINT_PORT: '',
+      WIREGUARD_PUBLIC_KEY: '', WIREGUARD_PRIVATE_KEY: '', WIREGUARD_ADDRESSES: '',
     }, 'wireguard')
   }
   const envIndent = lines[envIndex].search(/\S/)
@@ -174,7 +162,6 @@ function parseWireguardConfig(input: string) {
       if (key === 'privatekey') env.WIREGUARD_PRIVATE_KEY = value
       if (key === 'address') env.WIREGUARD_ADDRESSES = value
       if (key === 'dns') env.WIREGUARD_DNS = value
-      if (key === 'mtu') env.WIREGUARD_MTU = value
       continue
     }
 
@@ -182,9 +169,6 @@ function parseWireguardConfig(input: string) {
       if (key === 'publickey') env.WIREGUARD_PUBLIC_KEY = value
       if (key === 'presharedkey') env.WIREGUARD_PRESHARED_KEY = value
       if (key === 'allowedips') env.WIREGUARD_ALLOWED_IPS = value
-      if (key === 'persistentkeepalive') {
-        env.WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL = /^\d+$/.test(value) ? `${value}s` : value
-      }
       if (key === 'endpoint') {
         const endpoint = parseWireguardEndpoint(value)
         if (endpoint.host) env.WIREGUARD_ENDPOINT_IP = endpoint.host
@@ -214,22 +198,16 @@ function validateExitForm(
   protocol: 'wireguard' | 'openvpn',
   environmentYaml: string
 ) {
-  if (!name.trim()) return 'Name is required'
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(name.trim())) return 'Use 1–63 letters, numbers, hyphens, or underscores for the name'
   const env = parseEnvYamlBlock(environmentYaml)
-  if (!env.VPN_SERVICE_PROVIDER) return 'VPN_SERVICE_PROVIDER is required'
-  const isCustom = isCustomProvider(env)
-  if (protocol === 'wireguard' && isCustom) {
+  if (protocol === 'wireguard') {
     if (!env.WIREGUARD_ENDPOINT_IP) return 'WIREGUARD_ENDPOINT_IP is required for custom WireGuard exits'
     if (!env.WIREGUARD_ENDPOINT_PORT) return 'WIREGUARD_ENDPOINT_PORT is required for custom WireGuard exits'
     if (!env.WIREGUARD_PUBLIC_KEY) return 'WIREGUARD_PUBLIC_KEY is required for custom WireGuard exits'
     if (!env.WIREGUARD_PRIVATE_KEY) return 'WIREGUARD_PRIVATE_KEY is required for custom WireGuard exits'
     if (!env.WIREGUARD_ADDRESSES) return 'WIREGUARD_ADDRESSES is required for custom WireGuard exits'
   }
-  if (protocol === 'wireguard' && !env.WIREGUARD_PRIVATE_KEY) return 'WIREGUARD_PRIVATE_KEY is required'
-  if (!isCustom && !env.SERVER_COUNTRIES && !env.SERVER_CITIES)
-    return 'SERVER_COUNTRIES or SERVER_CITIES is required'
-  if (protocol === 'openvpn' && (!env.OPENVPN_USER || !env.OPENVPN_PASSWORD))
-    return 'OPENVPN_USER and OPENVPN_PASSWORD are required'
+  if (protocol === 'openvpn') return 'Import a complete WireGuard configuration to use sing-box'
   return ''
 }
 
@@ -314,7 +292,7 @@ export default function Exits() {
   })
   const stopMut = useMutation({
     mutationFn: stopExit,
-    onSuccess: () => toast.success('Exit and relay stopped'),
+    onSuccess: () => toast.success('Exit stopped'),
     onSettled: invalidate,
     onError: err => toast.error(getApiError(err)),
   })
@@ -330,7 +308,7 @@ export default function Exits() {
     onSuccess: result => {
       setStopFailures(result.results.filter(r => r.error).map(r => `${r.name}: ${r.error}`))
       if (result.failed_count) toast.error(`${result.failed_count} exits could not be fully stopped`)
-      else toast.success('All VPN exits and relays stopped')
+      else toast.success('All VPN exits stopped')
     },
     onError: err => toast.error(getApiError(err)),
     onSettled: invalidate,
@@ -339,7 +317,7 @@ export default function Exits() {
   const handleStopAll = async () => {
     const ok = await confirm({
       title: 'Stop All Exits',
-      message: 'Stop all VPN exits and their relays? Routed connections will disconnect. Rules and subscriptions are kept; start exits again to resume.',
+      message: 'Stop all VPN exits? Routed connections will disconnect. Rules and subscriptions are kept; start exits again to resume.',
       confirmText: 'Stop All',
       dangerous: true,
     })
@@ -414,7 +392,7 @@ export default function Exits() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Exits</h1>
-          <p className="page-subtitle">Manage Gluetun VPN exit containers</p>
+          <p className="page-subtitle">Manage sing-box WireGuard VPN exits</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" disabled={runtimeBusy || exits.length === 0} onClick={handleStopAll}>
@@ -434,7 +412,7 @@ export default function Exits() {
         {exits.length > 0 && <p className="mt-2">Showing the last received list.</p>}
       </div>}
       {stopFailures.length > 0 && <div className="card border-red-800" role="alert">
-        <p className="text-red-300 mb-2">Some components could not be stopped. Retry Stop All after checking these errors:</p>
+        <p className="text-red-300 mb-2">Some exits could not be stopped. Retry Stop All after checking these errors:</p>
         {stopFailures.map(message => <p key={message} className="text-sm text-red-400">{message}</p>)}
       </div>}
       {isLoading ? (
@@ -545,6 +523,7 @@ function ExitCard({
             <div className="flex items-center gap-2 mb-1">
               <span className="font-semibold text-white">{exit.name}</span>
               <StatusBadge status={exit.status} />
+              {exit.runtime !== 'sing-box' && <span className="badge-yellow">Needs WireGuard config</span>}
               {!exit.enabled && <span className="badge-gray">Disabled</span>}
             </div>
             <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
@@ -571,7 +550,7 @@ function ExitCard({
             <Activity size={12} className={checking ? 'animate-pulse' : ''} /> {checking ? 'Checking…' : 'Check status'}
           </button>
           {exit.status !== 'running' && (
-            <button disabled={busy || !exit.enabled} className="btn-success text-xs" onClick={onStart}>
+            <button disabled={busy || !exit.enabled || exit.runtime !== 'sing-box'} className="btn-success text-xs" onClick={onStart}>
               <Play size={12} /> Start
             </button>
           )}
@@ -580,13 +559,13 @@ function ExitCard({
               <Square size={12} /> Stop
             </button>
           )}
-          <button disabled={busy || !exit.enabled} className="btn-secondary text-xs" onClick={onRestart}>
+          <button disabled={busy || !exit.enabled || exit.runtime !== 'sing-box'} className="btn-secondary text-xs" onClick={onRestart}>
             <RotateCcw size={12} /> Restart
           </button>
           <button className="btn-ghost text-xs" disabled={busy} onClick={onEdit}>
             <Pencil size={12} /> Edit
           </button>
-          <button className="btn-ghost text-xs" onClick={onCopy}>
+          <button className="btn-ghost text-xs" disabled={busy || exit.runtime !== 'sing-box'} onClick={onCopy}>
             <Copy size={12} /> Copy
           </button>
           <button className="btn-ghost text-xs" onClick={onLogs}>
@@ -626,9 +605,9 @@ function ExitFormModal({
     enabled: exit?.enabled ?? true,
     protocol: 'wireguard' as 'wireguard' | 'openvpn',
     environment_yaml: stringifyEnvYamlBlock({
-      VPN_SERVICE_PROVIDER: 'protonvpn', VPN_TYPE: 'wireguard',
-      SERVER_COUNTRIES: 'United States', SERVER_CITIES: '',
-      WIREGUARD_PRIVATE_KEY: '', WIREGUARD_ADDRESSES: '',
+      VPN_SERVICE_PROVIDER: 'custom', VPN_TYPE: 'wireguard',
+      WIREGUARD_ENDPOINT_IP: '', WIREGUARD_ENDPOINT_PORT: '',
+      WIREGUARD_PUBLIC_KEY: '', WIREGUARD_PRIVATE_KEY: '', WIREGUARD_ADDRESSES: '',
     }, 'wireguard'),
   })
   const [localError, setLocalError] = useState('')
@@ -678,7 +657,9 @@ function ExitFormModal({
     const importedEnv = /\[(interface|peer)]/i.test(content)
       ? parseWireguardConfig(content)
       : parseEnvYamlBlock(content)
-    const protocol = importedEnv.VPN_TYPE === 'openvpn' ? 'openvpn' : 'wireguard'
+    const protocol = 'wireguard'
+    importedEnv.VPN_SERVICE_PROVIDER = 'custom'
+    importedEnv.VPN_TYPE = 'wireguard'
     setForm(f => ({ ...f, protocol, environment_yaml: stringifyEnvYamlBlock(importedEnv, protocol) }))
     setLocalError('')
     event.target.value = ''
@@ -697,7 +678,7 @@ function ExitFormModal({
     const err = validateExitForm(form.name, form.protocol, form.environment_yaml)
     if (err) { setLocalError(err); return }
     setLocalError('')
-    onSubmit({ name: form.name, enabled: form.enabled, config_yaml: buildComposeYaml(form.enabled, form.environment_yaml) })
+    onSubmit({ name: form.name, enabled: form.enabled, runtime: 'sing-box', config_yaml: buildComposeYaml(form.enabled, form.environment_yaml) })
   }
 
   const displayError = localError || error
@@ -741,7 +722,7 @@ function ExitFormModal({
             </div>
           </div>
 
-          {/* Protocol toggle */}
+          {/* Protocol */}
           <div>
             <label className="label">VPN Protocol</label>
             <div className="flex gap-2">
@@ -754,16 +735,6 @@ function ExitFormModal({
                 }))}
               >
                 <Wifi size={14} /> WireGuard
-              </button>
-              <button
-                type="button"
-                className={form.protocol === 'openvpn' ? 'btn-primary' : 'btn-secondary'}
-                onClick={() => setForm(f => ({
-                  ...f, protocol: 'openvpn',
-                  environment_yaml: convertEnvironmentBlock(f.environment_yaml, 'openvpn'),
-                }))}
-              >
-                <Shield size={14} /> OpenVPN
               </button>
             </div>
           </div>
@@ -782,7 +753,7 @@ function ExitFormModal({
 
           {/* Environment fields */}
           <div>
-            <label className="label">Environment Variables</label>
+            <label className="label">WireGuard connection</label>
             <div className="space-y-3 bg-gray-800/40 rounded-xl p-4 border border-gray-700/50">
               {configLoading && (
                 <p className="text-xs text-gray-500">Loading current config...</p>
@@ -791,22 +762,6 @@ function ExitFormModal({
                 <div key={key}>
                   <div className="flex items-center justify-between gap-3">
                     <label className="label">{envLabels[key] ?? key}</label>
-                    {key === 'VPN_SERVICE_PROVIDER' && (
-                      <button
-                        type="button"
-                        className="text-xs text-indigo-400 hover:text-indigo-300"
-                        onClick={() => {
-                          const next = applyCustomWireguardDefaults(parseEnvYamlBlock(form.environment_yaml))
-                          setForm(f => ({
-                            ...f,
-                            protocol: 'wireguard',
-                            environment_yaml: stringifyEnvYamlBlock(next, 'wireguard'),
-                          }))
-                        }}
-                      >
-                        Use Custom
-                      </button>
-                    )}
                   </div>
                   <input
                     className="input font-mono text-xs"
@@ -851,18 +806,18 @@ function ExitFormModal({
               </button>
             </div>
             <p className="text-xs text-gray-600 mt-1.5">
-              Custom WireGuard requires endpoint IP/port, server public key, private key, and addresses
+              Import a WireGuard .conf file, or enter its endpoint, keys, and interface address. Provider name and region alone are insufficient.
             </p>
           </div>
 
-          {/* Compose preview toggle */}
+          {/* Configuration preview toggle */}
           <div>
             <button
               type="button"
               className="btn-ghost text-xs"
               onClick={() => setShowPreview(v => !v)}
             >
-              {showPreview ? 'Hide' : 'Show'} Compose Preview
+              {showPreview ? 'Hide' : 'Show'} Configuration Preview
             </button>
             {showPreview && (
               <pre className="mt-2 input min-h-[140px] font-mono text-xs text-gray-400 whitespace-pre-wrap">

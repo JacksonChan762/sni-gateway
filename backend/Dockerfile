@@ -23,5 +23,5 @@ COPY --from=builder /sni-gateway .
 # Build the UI from the same source revision as the backend
 COPY --from=frontend /build/backend/public/ ./public/
 
-EXPOSE 8080
+EXPOSE 80 443 8080
 CMD ["./sni-gateway"]

@@ -74,14 +74,14 @@ export default function Publish() {
   const handleApply = async () => {
     const ok = await confirm({
       title: 'Apply Configuration',
-      message: 'Publish the saved routes to nginx? The server will check its configuration before the reload signal is sent.',
+      message: 'Publish the saved routes to the SNI gateway? New connections will use the updated routes immediately.',
       confirmText: 'Publish Routes',
     })
     if (!ok) return
     setApplyLoading(true)
     try {
       await applyConfig()
-      toast.success('Configuration checked and reload signal sent')
+      toast.success('Routes published')
       setPreview(null)
       setValidationResult(null)
       refreshPublication()
@@ -96,7 +96,7 @@ export default function Publish() {
   const handleRollback = async () => {
     const ok = await confirm({
       title: 'Rollback Configuration',
-      message: 'Restore the previous nginx configuration? Current rules will no longer be active.',
+      message: 'Restore the previous published routes? New connections will use that version immediately.',
       confirmText: 'Rollback',
       dangerous: true,
     })
@@ -139,7 +139,7 @@ export default function Publish() {
     },
     {
       label: '3. Publish routes',
-      desc: 'Check nginx syntax, then request a reload',
+      desc: 'Activate saved routes for new connections',
       icon: Upload,
       color: 'text-green-400',
       border: 'hover:border-green-700/60',
@@ -166,8 +166,8 @@ export default function Publish() {
       ) : publishStatus ? (
         <div role="status" className={`card text-sm ${publishStatus.pending ? 'border-amber-700/50 bg-amber-950/20 text-amber-100' : 'border-green-800/50 bg-green-950/20 text-green-200'}`}>
           {publishStatus.pending
-            ? 'Saved routes differ from the configuration last written for nginx. Publish to apply them.'
-            : 'Saved routes match the configuration last written for nginx.'}
+            ? 'Saved routes differ from the active routes. Publish to apply them.'
+            : 'Saved routes match the active routes.'}
         </div>
       ) : null}
 
@@ -243,7 +243,7 @@ export default function Publish() {
             <div className={`text-sm font-medium ${validationResult.valid ? 'text-green-300' : 'text-red-300'}`}>
               {validationResult.valid ? 'Saved rules can generate a configuration' : 'Saved rules need attention'}
             </div>
-            {validationResult.valid && <p className="text-xs text-green-200/70 mt-1">Nginx syntax is checked when you publish.</p>}
+            {validationResult.valid && <p className="text-xs text-green-200/70 mt-1">Rules are checked again when you publish.</p>}
             {validationResult.error && (
               <pre className="text-xs text-red-400 mt-1.5 whitespace-pre-wrap font-mono bg-red-950/30 px-2 py-1.5 rounded-lg">
                 {validationResult.error}

@@ -26,10 +26,10 @@ type SubscriptionManager struct {
 	client    *http.Client
 	cron      *cron.Cron
 	entries   map[uint]cron.EntryID
-	configGen *ConfigGenerator
+	configGen Publisher
 }
 
-func NewSubscriptionManager(configGen *ConfigGenerator) *SubscriptionManager {
+func NewSubscriptionManager(configGen Publisher) *SubscriptionManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SubscriptionManager{
 		ctx: ctx, cancel: cancel,

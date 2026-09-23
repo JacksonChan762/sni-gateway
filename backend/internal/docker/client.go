@@ -438,7 +438,7 @@ func (c *Client) errorWithContainerLogs(ctx context.Context, name string, err er
 	if logsErr != nil || strings.TrimSpace(logs) == "" {
 		return err
 	}
-	return fmt.Errorf("%w; gluetun logs:\n%s", err, strings.TrimSpace(logs))
+	return fmt.Errorf("%w; container logs:\n%s", err, strings.TrimSpace(logs))
 }
 
 func (c *Client) containerLogsTail(ctx context.Context, name string, tail int) (string, error) {

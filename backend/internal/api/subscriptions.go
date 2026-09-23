@@ -12,10 +12,10 @@ import (
 
 type SubscriptionHandler struct {
 	manager   *services.SubscriptionManager
-	generator *services.ConfigGenerator
+	generator services.Publisher
 }
 
-func NewSubscriptionHandler(mgr *services.SubscriptionManager, gen *services.ConfigGenerator) *SubscriptionHandler {
+func NewSubscriptionHandler(mgr *services.SubscriptionManager, gen services.Publisher) *SubscriptionHandler {
 	return &SubscriptionHandler{manager: mgr, generator: gen}
 }
 

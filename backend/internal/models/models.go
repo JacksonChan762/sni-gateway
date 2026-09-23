@@ -7,7 +7,7 @@ import (
 type Exit struct {
 	ID         uint      `json:"id" gorm:"primaryKey;autoIncrement"`
 	Name       string    `json:"name" gorm:"uniqueIndex;not null"`
-	Runtime    string    `json:"runtime" gorm:"default:'gluetun'"`
+	Runtime    string    `json:"runtime" gorm:"default:'sing-box'"`
 	Protocol   string    `json:"protocol"` // wireguard / openvpn
 	Provider   string    `json:"provider"`
 	Country    string    `json:"country"`

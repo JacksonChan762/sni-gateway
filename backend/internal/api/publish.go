@@ -11,10 +11,10 @@ import (
 )
 
 type PublishHandler struct {
-	generator *services.ConfigGenerator
+	generator services.Publisher
 }
 
-func NewPublishHandler(gen *services.ConfigGenerator) *PublishHandler {
+func NewPublishHandler(gen services.Publisher) *PublishHandler {
 	return &PublishHandler{generator: gen}
 }
 
@@ -50,7 +50,7 @@ func (h *PublishHandler) Apply(c *fiber.Ctx) error {
 	}
 
 	h.recordHistory("success", "config applied successfully", config)
-	return c.JSON(fiber.Map{"message": "config applied and nginx reloaded"})
+	return c.JSON(fiber.Map{"message": "routes published"})
 }
 
 func (h *PublishHandler) Rollback(c *fiber.Ctx) error {

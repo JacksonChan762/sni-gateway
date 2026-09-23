@@ -12,6 +12,7 @@ frontend/dist/
 # Go build/test output
 *.test
 *.out
+__pycache__/
 coverage.out
 bin/
 
