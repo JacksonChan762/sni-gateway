@@ -52,7 +52,6 @@ install_stack() {
   echo "Building and starting services; this may take a few minutes..."
   trap 'echo "Installation did not complete. Check: docker compose ps; docker compose logs --tail=100" >&2' ERR
   docker image inspect ghcr.io/sagernet/sing-box:v1.14.1 >/dev/null 2>&1 || docker pull ghcr.io/sagernet/sing-box:v1.14.1
-  docker pull qmcgaw/gluetun:latest
   docker compose up -d --build --remove-orphans --wait --wait-timeout 180
   stop_legacy_exits
   trap - EXIT
@@ -108,7 +107,6 @@ update_stack() {
   git merge --ff-only "$target"
   docker compose config --quiet
   docker image inspect ghcr.io/sagernet/sing-box:v1.14.1 >/dev/null 2>&1 || docker pull ghcr.io/sagernet/sing-box:v1.14.1
-  docker pull qmcgaw/gluetun:latest
   docker compose build --pull
   docker compose up -d --remove-orphans --wait --wait-timeout 180
   stop_legacy_exits

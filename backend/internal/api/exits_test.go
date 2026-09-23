@@ -95,6 +95,19 @@ func TestValidateExitRequestRejectsIncompleteVPNConfig(t *testing.T) {
 	}
 }
 
+func TestValidateSingBoxProviderCredentialsWithoutProfiles(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	auto := true
+	for _, request := range []CreateExitRequest{
+		{Name: "proton-wg", Runtime: "sing-box", Protocol: "wireguard", Provider: "protonvpn", Country: "Taiwan", City: "Taipei", AutoServer: &auto, WireguardPrivKey: key},
+		{Name: "proton-ovpn", Runtime: "sing-box", Protocol: "openvpn", Provider: "protonvpn", Country: "Taiwan", City: "Taipei", AutoServer: &auto, OpenVPNUser: "test", OpenVPNPassword: "test"},
+	} {
+		if err := validateExitRequest(request); err != nil {
+			t.Fatalf("%s: %v", request.Name, err)
+		}
+	}
+}
+
 func TestOpenVPNExitConfigRoundTrip(t *testing.T) {
 	profile := "client\nremote 203.0.113.10 1194\n<ca>\nTEST CA\n</ca>\n"
 	req := CreateExitRequest{Protocol: "openvpn", OpenVPNProfile: profile, OpenVPNUser: "alice", OpenVPNPassword: "secret"}

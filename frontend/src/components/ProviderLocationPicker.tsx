@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { getApiError, getVPNLocations, getVPNProviders } from '../api/client'
 
-export default function ProviderLocationPicker({ protocol, provider, country, city, runtime, onChange }: {
+export default function ProviderLocationPicker({ protocol, provider, country, city, providerMode, onChange }: {
   protocol: 'wireguard' | 'openvpn'
   provider: string
   country: string
   city: string
-  runtime: string
+  providerMode: boolean
   onChange: (provider: string, country: string, city: string) => void
 }) {
   const providers = useQuery({ queryKey: ['vpn-providers'], queryFn: getVPNProviders })
@@ -37,6 +37,6 @@ export default function ProviderLocationPicker({ protocol, provider, country, ci
     </div>}
     {providers.error && <p className="text-xs text-red-400">Catalog unavailable: {getApiError(providers.error)}</p>}
     {locations.error && <p className="text-xs text-red-400">Could not load locations: {getApiError(locations.error)}</p>}
-    {provider !== 'custom' && <p className="text-xs text-gray-400">{runtime === 'gluetun' ? 'Gluetun selects a server in this location. Enter only the credentials required by your provider below.' : 'This existing sing-box exit keeps its current configuration. Change the provider or location to use Gluetun provider mode.'}</p>}
+    {provider !== 'custom' && <p className="text-xs text-gray-400">{providerMode ? 'sing-box connects to a server in this location. Enter only the credentials required by your provider below.' : 'Change the provider or location to use the simplified sing-box provider mode.'}</p>}
   </div>
 }

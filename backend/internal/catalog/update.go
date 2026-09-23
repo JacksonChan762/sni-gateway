@@ -68,6 +68,7 @@ func LoadCache(filename string) error {
 	if err := validateSnapshot(cached); err != nil {
 		return err
 	}
+	normalizeCountries(&cached)
 	snapshot.Store(&cached)
 	return nil
 }
@@ -231,6 +232,7 @@ func parseArchive(body io.Reader, commit string) (Snapshot, error) {
 	if err := validateSnapshot(result); err != nil {
 		return Snapshot{}, err
 	}
+	normalizeCountries(&result)
 	return result, nil
 }
 

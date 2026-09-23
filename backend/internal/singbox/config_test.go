@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"sni-gateway/internal/catalog"
 	"sni-gateway/internal/models"
 )
 
@@ -87,6 +88,34 @@ func TestAutomaticServerChangesWireguardEndpoint(t *testing.T) {
 	}
 }
 
+func TestProviderWireGuardNeedsOnlyProviderCredentials(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	for _, test := range []struct {
+		provider, country, city, address string
+		port                             float64
+	}{
+		{"protonvpn", "Taiwan", "Taipei", "10.2.0.2/32", 51820},
+		{"nordvpn", "United States", "New York", "10.5.0.2/32", 51820},
+	} {
+		raw, _ := json.Marshal(map[string]any{"auto_server": true, "wireguard_private_key": key})
+		exit := models.Exit{Name: "provider-test", Protocol: "wireguard", Provider: test.provider,
+			Country: test.country, City: test.city, ConfigJSON: string(raw)}
+		built, err := BuildExitConfig(exit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config map[string]any
+		if err := json.Unmarshal(built, &config); err != nil {
+			t.Fatal(err)
+		}
+		endpoint := config["endpoints"].([]any)[0].(map[string]any)
+		peer := endpoint["peers"].([]any)[0].(map[string]any)
+		if peer["port"] != test.port || endpoint["address"].([]any)[0] != test.address || peer["public_key"] == "" {
+			t.Fatalf("incomplete %s provider configuration: %s", test.provider, built)
+		}
+	}
+}
+
 func TestAutomaticServerChangesOpenVPNRemote(t *testing.T) {
 	fields := map[string]any{"auto_server": true, "openvpn_profile": "client\nproto udp\nremote 203.0.113.10 1194\n<ca>\nTEST CA\n</ca>\n"}
 	encoded, _ := json.Marshal(fields)
@@ -102,5 +131,33 @@ func TestAutomaticServerChangesOpenVPNRemote(t *testing.T) {
 	remote := config["endpoints"].([]any)[0].(map[string]any)["servers"].([]any)[0].(map[string]any)
 	if remote["server"] == "203.0.113.10" || remote["server_port"] != float64(1194) {
 		t.Fatalf("catalog remote not applied: %+v", remote)
+	}
+}
+
+func TestProviderOpenVPNTemplatesBuildForCatalog(t *testing.T) {
+	providers, _, err := catalog.ListProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range providers {
+		if item.OpenVPN == 0 || item.Name == "ovpn" {
+			continue
+		}
+		country := ""
+		for _, candidate := range item.Countries {
+			if _, err := catalog.Select(item.Name, "openvpn", candidate, "", "template-test"); err == nil {
+				country = candidate
+				break
+			}
+		}
+		if country == "" {
+			t.Errorf("%s has no selectable OpenVPN country", item.Name)
+			continue
+		}
+		fields, _ := json.Marshal(map[string]any{"auto_server": true, "openvpn_user": "user", "openvpn_password": "password"})
+		exit := models.Exit{Name: "template-test", Protocol: "openvpn", Provider: item.Name, Country: country, ConfigJSON: string(fields)}
+		if _, err := BuildExitConfig(exit); err != nil {
+			t.Errorf("%s: %v", item.Name, err)
+		}
 	}
 }

@@ -14,7 +14,7 @@ var openVPNHost = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z
 
 // parseOpenVPNProfile accepts portable inline profiles. Unsupported directives
 // fail explicitly so a VPN profile is never silently weakened on import.
-func parseOpenVPNProfile(profile, username, password string) (map[string]any, bool, error) {
+func parseOpenVPNProfile(profile, username, password string, allowEmptyPassword ...bool) (map[string]any, bool, error) {
 	if len(profile) == 0 || len(profile) > 512*1024 {
 		return nil, false, errors.New("OpenVPN profile must be 1–524288 bytes")
 	}
@@ -166,19 +166,64 @@ func parseOpenVPNProfile(profile, username, password string) (map[string]any, bo
 			if err != nil {
 				return nil, false, err
 			}
-			endpoint["data_ciphers_fallback"] = value
+			endpoint["data_ciphers_fallback"] = strings.ToUpper(value)
 		case "data-ciphers", "ncp-ciphers":
 			value, err := argument()
 			if err != nil {
 				return nil, false, err
 			}
-			endpoint["data_ciphers"] = strings.Split(value, ":")
+			ciphers := strings.Split(value, ":")
+			for i := range ciphers {
+				ciphers[i] = strings.ToUpper(ciphers[i])
+			}
+			endpoint["data_ciphers"] = ciphers
+		case "data-ciphers-fallback":
+			value, err := argument()
+			if err != nil {
+				return nil, false, err
+			}
+			endpoint["data_ciphers_fallback"] = strings.ToUpper(value)
 		case "auth":
 			value, err := argument()
 			if err != nil {
 				return nil, false, err
 			}
-			endpoint["auth"] = value
+			endpoint["auth"] = strings.ToUpper(value)
+		case "tls-cipher":
+			value, err := argument()
+			if err != nil {
+				return nil, false, err
+			}
+			tls["cipher"] = value
+		case "mssfix", "fragment", "ping", "reneg-sec":
+			value, err := argument()
+			if err != nil {
+				return nil, false, err
+			}
+			number, err := strconv.Atoi(value)
+			if err != nil || number < 0 || number > 65535 {
+				return nil, false, fmt.Errorf("line %d: invalid %s", lineNumber, key)
+			}
+			switch key {
+			case "mssfix":
+				endpoint["mss_fix"] = number
+			case "fragment":
+				endpoint["fragment"] = number
+			case "ping":
+				endpoint["ping_interval"] = fmt.Sprintf("%ds", number)
+			case "reneg-sec":
+				if number == 0 {
+					endpoint["renegotiate_disabled"] = true
+				} else {
+					endpoint["renegotiate_interval"] = fmt.Sprintf("%ds", number)
+				}
+			}
+		case "comp-lzo":
+			value := "yes"
+			if len(args) != 0 {
+				value = args[0]
+			}
+			endpoint["compression_lzo"] = value
 		case "tun-mtu":
 			value, err := argument()
 			if err != nil {
@@ -213,7 +258,7 @@ func parseOpenVPNProfile(profile, username, password string) (map[string]any, bo
 		return nil, false, errors.New("OpenVPN client certificate and key must both be present")
 	}
 	if username != "" || password != "" {
-		if username == "" || password == "" {
+		if username == "" || (password == "" && (len(allowEmptyPassword) == 0 || !allowEmptyPassword[0])) {
 			return nil, false, errors.New("OpenVPN username and password must both be provided")
 		}
 		endpoint["username"], endpoint["password"] = username, password

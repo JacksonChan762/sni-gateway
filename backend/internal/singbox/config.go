@@ -11,10 +11,10 @@ import (
 
 	"sni-gateway/internal/catalog"
 	"sni-gateway/internal/models"
+	"sni-gateway/internal/provider"
 )
 
 // BuildExitConfig creates an isolated SOCKS ingress whose only route is the VPN.
-// Legacy provider/region credentials cannot identify a WireGuard peer.
 func BuildExitConfig(exit models.Exit) ([]byte, error) {
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(exit.ConfigJSON), &raw); err != nil {
@@ -30,11 +30,18 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 	privateKey, publicKey := field("wireguard_private_key"), field("wireguard_public_key")
 	endpoint, portText := field("wireguard_endpoint_ip"), field("wireguard_endpoint_port")
 	if autoServerEnabled(raw) {
+		if !provider.WireGuard(exit.Provider) {
+			return nil, fmt.Errorf("%s has no supported WireGuard provider configuration", exit.Provider)
+		}
 		server, err := catalog.Select(exit.Provider, "wireguard", exit.Country, exit.City, exit.Name)
 		if err != nil {
 			return nil, err
 		}
 		endpoint, publicKey = server.IP, server.PublicKey
+		if portText == "" {
+			port, _ := provider.WireGuardPort(exit.Provider)
+			portText = strconv.Itoa(int(port))
+		}
 	}
 	if _, err := netip.ParseAddr(endpoint); err != nil {
 		return nil, errors.New("WireGuard endpoint IP is required")
@@ -49,7 +56,11 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 			return nil, fmt.Errorf("WireGuard %s key must be a 32-byte base64 key", label)
 		}
 	}
-	addresses, err := prefixes(field("wireguard_addresses"))
+	addressText := field("wireguard_addresses")
+	if addressText == "" && autoServerEnabled(raw) {
+		addressText = provider.DefaultAddresses(exit.Provider)
+	}
+	addresses, err := prefixes(addressText)
 	if err != nil || len(addresses) == 0 {
 		return nil, errors.New("WireGuard interface addresses must be CIDR prefixes")
 	}
@@ -106,11 +117,21 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 
 func buildOpenVPNConfig(exit models.Exit, raw map[string]any) ([]byte, error) {
 	field := func(name string) string { value, _ := raw[name].(string); return strings.TrimSpace(value) }
-	endpoint, hasHostname, err := parseOpenVPNProfile(field("openvpn_profile"), field("openvpn_user"), field("openvpn_password"))
+	profile := field("openvpn_profile")
+	providerResolved := false
+	if profile == "" && autoServerEnabled(raw) {
+		var err error
+		profile, err = buildProviderOpenVPNProfile(exit, field("openvpn_cert"), field("openvpn_key"), field("openvpn_key_passphrase"))
+		if err != nil {
+			return nil, err
+		}
+		providerResolved = true
+	}
+	endpoint, hasHostname, err := parseOpenVPNProfile(profile, field("openvpn_user"), field("openvpn_password"), providerResolved && exit.Provider == "ivpn")
 	if err != nil {
 		return nil, err
 	}
-	if autoServerEnabled(raw) {
+	if autoServerEnabled(raw) && !providerResolved {
 		remotes := endpoint["servers"].([]map[string]any)
 		remote := remotes[0]
 		network, _ := remote["network"].(string)

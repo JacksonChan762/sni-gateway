@@ -52,3 +52,13 @@ func TestOpenVPNProfileRejectsUnsupportedOrIncompleteConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestIVPNAccountIDAllowsEmptyOpenVPNPassword(t *testing.T) {
+	endpoint, _, err := parseOpenVPNProfile(sampleOpenVPN, "ivpn-aaaa-bbbb-cccc", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint["username"] != "ivpn-aaaa-bbbb-cccc" || endpoint["password"] != "" {
+		t.Fatal("IVPN account credentials were not preserved")
+	}
+}

@@ -57,3 +57,25 @@ func TestProviderClientCertificate(t *testing.T) {
 		t.Fatal("PEM conversion failed")
 	}
 }
+
+func TestOpenVPNProviderSpecificAuthentication(t *testing.T) {
+	cert := "-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----"
+	key := "-----BEGIN PRIVATE KEY-----\nREVG\n-----END PRIVATE KEY-----"
+	for _, test := range []struct {
+		name        string
+		credentials Credentials
+		valid       bool
+	}{
+		{"airvpn", Credentials{OpenVPNCert: cert, OpenVPNKey: key}, true},
+		{"vpn unlimited", Credentials{OpenVPNCert: cert, OpenVPNKey: key}, false},
+		{"vpn unlimited", Credentials{OpenVPNUser: "u", OpenVPNPassword: "p", OpenVPNCert: cert, OpenVPNKey: key}, true},
+		{"vpnsecure", Credentials{OpenVPNCert: cert, OpenVPNKey: key}, false},
+		{"vpnsecure", Credentials{OpenVPNCert: cert, OpenVPNKey: key, OpenVPNKeyPassphrase: "pass"}, true},
+		{"ivpn", Credentials{OpenVPNUser: "ivpn-ABCD-EFGH-IJKL"}, true},
+	} {
+		err := Validate(testExit(test.name, "openvpn", test.credentials))
+		if (err == nil) != test.valid {
+			t.Errorf("%s valid=%v: %v", test.name, test.valid, err)
+		}
+	}
+}

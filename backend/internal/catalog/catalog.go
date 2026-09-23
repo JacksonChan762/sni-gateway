@@ -80,12 +80,52 @@ func Load() (Snapshot, error) {
 			loadErr = errors.New("empty provider catalog")
 			return
 		}
+		normalizeCountries(&initial)
 		snapshot.Store(&initial)
 	})
 	if loadErr != nil {
 		return Snapshot{}, loadErr
 	}
 	return *snapshot.Load(), nil
+}
+
+// Some upstream provider files use only a region label. Derive its country so
+// the same country/city picker can select their servers without inventing a
+// server address or depending on a provider-specific external API.
+func normalizeCountries(data *Snapshot) {
+	known := map[string]bool{"Marshall Islands": true, "Fake Antarctica": true}
+	for _, servers := range data.Providers {
+		for _, server := range servers {
+			if server.Country != "" {
+				known[server.Country] = true
+			}
+		}
+	}
+	countries := make([]string, 0, len(known))
+	for country := range known {
+		countries = append(countries, country)
+	}
+	sort.Slice(countries, func(i, j int) bool { return len(countries[i]) > len(countries[j]) })
+	codes := map[string]string{"US": "United States", "USA": "United States", "CA": "Canada", "AU": "Australia", "BR": "Brazil", "CH": "Switzerland", "CL": "Chile", "DE": "Germany", "DK": "Denmark", "ES": "Spain", "FI": "Finland", "FR": "France", "IT": "Italy", "JP": "Japan", "NL": "Netherlands", "SE": "Sweden", "SG": "Singapore", "UK": "United Kingdom"}
+	for name, servers := range data.Providers {
+		for i := range servers {
+			if servers[i].Country != "" || servers[i].Region == "" {
+				continue
+			}
+			region := servers[i].Region
+			if country := codes[strings.Fields(region)[0]]; country != "" {
+				servers[i].Country = country
+				continue
+			}
+			for _, country := range countries {
+				if region == country || strings.HasPrefix(region, country+" ") {
+					servers[i].Country = country
+					break
+				}
+			}
+		}
+		data.Providers[name] = servers
+	}
 }
 
 func ListProviders() ([]Provider, string, error) {

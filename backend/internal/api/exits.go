@@ -95,17 +95,15 @@ func (h *ExitHandler) Create(c *fiber.Ctx) error {
 		req.Provider = "custom"
 	}
 	if req.Runtime == "" {
-		if req.Provider == "custom" {
-			req.Runtime = "sing-box"
-		} else {
-			req.Runtime = "gluetun"
-		}
+		req.Runtime = "sing-box"
 	}
-	if req.Runtime != "sing-box" && req.Runtime != "gluetun" {
-		return c.Status(400).JSON(fiber.Map{"error": "runtime must be sing-box or gluetun"})
+	if req.Runtime != "sing-box" {
+		return c.Status(400).JSON(fiber.Map{"error": "new exits must use sing-box"})
 	}
-	if req.Runtime == "gluetun" && req.Provider == "custom" {
-		return c.Status(400).JSON(fiber.Map{"error": "choose a Gluetun provider"})
+	if req.AutoServer == nil && req.Provider != "custom" && req.ConfigYAML == "" &&
+		(req.Protocol == "wireguard" && req.WireguardEndpointIP == "" || req.Protocol == "openvpn" && req.OpenVPNProfile == "") {
+		auto := true
+		req.AutoServer = &auto
 	}
 	if req.Protocol != "wireguard" && req.Protocol != "openvpn" {
 		return c.Status(400).JSON(fiber.Map{"error": "protocol must be wireguard or openvpn"})
@@ -375,6 +373,19 @@ func validateExitRequest(req CreateExitRequest) error {
 		return fmt.Errorf("choose a VPN provider and country for automatic server selection")
 	}
 	if req.Protocol == "wireguard" {
+		if auto {
+			config, err := buildExitConfigJSON(req)
+			if err != nil {
+				return err
+			}
+			exit := models.Exit{Name: req.Name, Runtime: "sing-box", Protocol: "wireguard", Provider: req.Provider,
+				Country: req.Country, City: req.City, ConfigJSON: config}
+			if err := provider.Validate(exit); err != nil {
+				return err
+			}
+			_, err = singbox.BuildExitConfig(exit)
+			return err
+		}
 		if !auto && req.WireguardEndpointIP == "" {
 			return fmt.Errorf("wireguard_endpoint_ip is required for custom wireguard exits")
 		}
@@ -431,7 +442,14 @@ func validateExitRequest(req CreateExitRequest) error {
 		if err != nil {
 			return err
 		}
-		_, err = singbox.BuildExitConfig(models.Exit{Name: req.Name, Protocol: "openvpn", Provider: req.Provider, Country: req.Country, City: req.City, ConfigJSON: config})
+		exit := models.Exit{Name: req.Name, Runtime: "sing-box", Protocol: "openvpn", Provider: req.Provider,
+			Country: req.Country, City: req.City, ConfigJSON: config}
+		if auto && req.OpenVPNProfile == "" {
+			if err := provider.Validate(exit); err != nil {
+				return err
+			}
+		}
+		_, err = singbox.BuildExitConfig(exit)
 		return err
 	}
 	return fmt.Errorf("protocol must be wireguard or openvpn")

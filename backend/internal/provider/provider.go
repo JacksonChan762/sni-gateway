@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"strings"
 
 	"sni-gateway/internal/models"
@@ -24,11 +25,35 @@ var wireguard = map[string]bool{
 	"airvpn": true, "fastestvpn": true, "ivpn": true, "mullvad": true,
 	"nordvpn": true, "protonvpn": true, "surfshark": true, "windscribe": true,
 }
+var ivpnAccountID = regexp.MustCompile(`^(i|ivpn)-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}$`)
 
 func Native(name string) bool            { return native[name] }
 func WireGuard(name string) bool         { return wireguard[name] }
 func NeedsAddress(name string) bool      { return name != "nordvpn" && name != "protonvpn" }
 func NeedsPresharedKey(name string) bool { return name == "airvpn" }
+
+// WireGuard ports and interface defaults follow the upstream Gluetun provider
+// connection settings. The server catalog supplies the endpoint IP and peer key.
+func WireGuardPort(name string) (uint16, bool) {
+	ports := map[string]uint16{
+		"airvpn": 1637, "fastestvpn": 51820, "ivpn": 58237,
+		"mullvad": 51820, "nordvpn": 51820, "protonvpn": 51820,
+		"surfshark": 51820, "windscribe": 1194,
+	}
+	port, ok := ports[name]
+	return port, ok
+}
+
+func DefaultAddresses(name string) string {
+	switch name {
+	case "nordvpn":
+		return "10.5.0.2/32"
+	case "protonvpn":
+		return "10.2.0.2/32,2a07:b944::2:2:0:0/128"
+	default:
+		return ""
+	}
+}
 func NeedsClientCertificate(name string) bool {
 	return name == "airvpn" || name == "vpn unlimited" || name == "cyberghost" || name == "vpnsecure"
 }
@@ -90,14 +115,21 @@ func Validate(exit models.Exit) error {
 			}
 		}
 	case "openvpn":
-		if exit.Provider != "airvpn" && exit.Provider != "vpn unlimited" && (credentials.OpenVPNUser == "" || credentials.OpenVPNPassword == "") {
-			return errors.New("OpenVPN username and password are required")
+		needsUser := exit.Provider != "airvpn" && exit.Provider != "vpnsecure"
+		if needsUser && credentials.OpenVPNUser == "" {
+			return errors.New("OpenVPN username is required")
+		}
+		if needsUser && credentials.OpenVPNPassword == "" && !(exit.Provider == "ivpn" && ivpnAccountID.MatchString(credentials.OpenVPNUser)) {
+			return errors.New("OpenVPN password is required")
 		}
 		if NeedsClientCertificate(exit.Provider) && (credentials.OpenVPNCert == "" || credentials.OpenVPNKey == "") {
 			return errors.New("OpenVPN client certificate and key are required for this provider")
 		}
 		if (credentials.OpenVPNCert == "") != (credentials.OpenVPNKey == "") {
 			return errors.New("OpenVPN client certificate and key must be provided together")
+		}
+		if exit.Provider == "vpnsecure" && credentials.OpenVPNKeyPassphrase == "" {
+			return errors.New("VPN Secure encrypted OpenVPN key passphrase is required")
 		}
 	default:
 		return errors.New("protocol must be wireguard or openvpn")

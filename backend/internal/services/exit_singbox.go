@@ -32,7 +32,12 @@ func (em *ExitManager) createAndStartSingBox(exit *models.Exit) error {
 		em.logEvent(exit.ID, "start", "failed", err.Error())
 		return err
 	}
-	ip, err := probeSingBoxPublicIP(exit.Name)
+	var ip string
+	if exit.Provider != "custom" {
+		ip, err = probeProviderPublicIP(ctx, exit.Name)
+	} else {
+		ip, err = probeSingBoxPublicIP(exit.Name)
+	}
 	if err != nil {
 		exit.Status, exit.PublicIP = "unhealthy", ""
 		if dbErr := db.DB.Model(exit).Updates(map[string]any{"status": exit.Status, "public_ip": ""}).Error; dbErr != nil {

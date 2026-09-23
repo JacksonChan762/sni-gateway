@@ -57,8 +57,8 @@ func (em *ExitManager) createAndStartProvider(exit *models.Exit) error {
 	return nil
 }
 
-// Gluetun starts its DNS resolver after the VPN interface. Give the resolver
-// and tunnel time to become usable before recording the exit as unhealthy.
+// Provider tunnels may need time to establish DNS and routes before the
+// public-IP probe can succeed.
 func probeProviderPublicIP(ctx context.Context, name string) (string, error) {
 	deadline := time.NewTimer(90 * time.Second)
 	defer deadline.Stop()
