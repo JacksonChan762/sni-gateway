@@ -1,52 +1,148 @@
-# SNI Gateway — sing-box provider and custom VPN exits
+# SNI Gateway
 
 [繁體中文](README.zh-TW.md)
 
-This branch uses a Go SNI ingress. sing-box connects built-in provider and custom VPN exits directly. The admin UI and API remain on `127.0.0.1:8080` by default. Ports 80 and 443 are served by the backend. Port 80 redirects matched hosts to HTTPS; port 443 passes the original TLS connection through the selected VPN without terminating TLS. Unmatched SNI names are closed.
+Route HTTPS connections to different VPN exits by domain name. SNI Gateway uses a Go ingress and **sing-box for both provider and custom VPN exits**, with a web UI for exits, routing rules, subscriptions, and publication.
 
-This is a migration branch, not the v1.1 stable release. The existing [v1.1 release notes](docs/releases/v1.1.md) describe the stable Nginx/Gluetun deployment.
+The gateway reads the TLS Server Name Indication (SNI), selects the published route, and forwards the original connection through the chosen VPN. TLS remains between the client and destination website; the gateway does not need the website's certificate or private key.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client[HTTPS client] -->|TCP 443 / TLS SNI| Gateway[Go SNI ingress]
+    Gateway -->|SOCKS5 on vpn-net| Exit[sing-box per VPN exit]
+    Exit -->|WireGuard or OpenVPN| VPN[VPN server]
+    VPN --> Website[Destination website]
+    Admin[Admin UI / API] -->|Publish routes| Gateway
+    Admin --> Database[(PostgreSQL)]
+```
+
+Docker Compose runs the backend and PostgreSQL. The backend serves the built React UI, manages a `singbox-<exit-name>` container for each exit, and switches to a prepared routing table when rules are published.
+
+| Port | Purpose |
+| --- | --- |
+| Host TCP 80 | Redirect matched domains to HTTPS; unmatched domains return 404 |
+| Host TCP 443 | TLS passthrough using published SNI rules; unmatched names are closed |
+| `127.0.0.1:8080` | Admin UI and API |
+| Container TCP 1080 | Per-exit SOCKS listener on the private `vpn-net` network; not published on the host |
+
+Destination DNS lookups go through the selected VPN. Custom OpenVPN profiles that identify the VPN server by hostname use local DNS to establish the tunnel first.
 
 ## Requirements
 
-- Docker and Docker Compose v2
-- Free host ports 80 and 443
-- Provider exits need the credentials required by that provider: OpenVPN service username/password and, for some providers, client certificate/key; or WireGuard private key and, where required, tunnel address and preshared key. Custom exits need a complete WireGuard configuration or portable OpenVPN `.ovpn` profile.
+- Docker and Docker Compose v2 with `up --wait` support, and an account that can access the Docker daemon.
+- Bash and OpenSSL for installation; Git and `flock` for updates.
+- Available host TCP ports 80, 443, and loopback port 8080.
+- VPN credentials or a complete custom WireGuard/OpenVPN configuration.
+
+Docker builds both the backend and frontend. Go and Node.js are only needed on the host for local development.
 
 ## Install
+
+Run from the repository checkout:
 
 ```bash
 ./sni-gateway.sh install
 ```
 
-The script creates `.env` with random admin credentials if needed. Open `http://127.0.0.1:8080` and read `ADMIN_PASSWORD` from `.env`. Keep that file private. The installer builds the backend and UI and pulls the official sing-box image. It removes the old Nginx Compose service and stops legacy relay containers after the new stack is healthy. PostgreSQL data is retained.
+The installer creates a private `.env` with random admin credentials when one does not exist, builds the application, prepares the sing-box image specified by the backend, and waits for Compose health checks. An existing `.env` is retained and its credentials are validated.
 
-For an existing checkout, back up the database before switching branches. The updater described in [application updates](docs/UPDATES.md) works after this branch is installed. When moving from an older Nginx/Gluetun revision, stop the old Compose stack, switch to this branch, then run `./sni-gateway.sh install`; this avoids port 80/443 conflicts during the first migration.
+Open `http://127.0.0.1:8080` and sign in with `ADMIN_USERNAME` and `ADMIN_PASSWORD` from `.env`. For a remote server, forward the admin port over SSH:
 
-## Use
+```bash
+ssh -L 8080:127.0.0.1:8080 user@gateway-host
+```
 
-1. Open **Exits** and select a built-in provider, a country or city, and a protocol. Country narrows the city picker; when a city is selected, only the city filters VPN endpoints. For OpenVPN, enter provider service credentials; providers that use client certificates ask for those too. For WireGuard, enter the private key and any additional fields shown for that provider. To use your own VPN server, select **Custom configuration** and import a WireGuard `.conf` or complete OpenVPN `.ovpn` profile. The gateway checks the public IP through the VPN on startup. **Running** means the probe succeeded; **Unhealthy** means it did not. Use **Logs** and **Check status** to investigate.
-2. Add exact or suffix domain rules and select an exit. A rule targeting an unconverted legacy exit cannot be published until that exit is edited.
-3. Open **Publish**, validate and publish the saved rules. New connections use the published table immediately. Rollback restores the previous published table. Subscription syncs can also publish updates.
-4. Point the domain to the gateway host and test a TLS connection. DNS resolution for the destination occurs through the selected VPN. sing-box routes the exit's SOCKS traffic only through its VPN endpoint.
+Then open the same local URL. Keep `.env` and database backups private; they contain credentials and VPN configuration.
 
-The WireGuard environment YAML and OpenVPN YAML export are application import/export formats, not standalone Docker Compose files. Each exit has a sing-box SOCKS listener on port 1080 inside the private `vpn-net` Docker network. The SOCKS listener is not published on the host.
+## Configure routing
 
-See the [API reference](docs/API.md) for endpoint details and WireGuard/OpenVPN request examples. Custom OpenVPN server hostnames use local DNS to bootstrap the tunnel; destination lookups use VPN DNS.
+1. **Create an exit.** Select a built-in provider, country or city, and WireGuard or OpenVPN. Enter the credentials requested by the form. To use your own VPN server, choose **Custom configuration** and import a WireGuard `.conf` or a portable OpenVPN `.ovpn` profile with its required certificates and keys.
+2. **Check the exit.** Startup probes the public IP through the VPN. **Running** indicates that the probe succeeded; **Unhealthy** indicates failure. **Logs** shows runtime output, and **Check status** probes the current connection again.
+3. **Add rules.** Map exact domains or domain suffixes to exits. The rules page supports search and pagination.
+4. **Publish.** Validate and publish the saved rules from **Publish**. New connections immediately use the published table. Rollback restores the previous table. Subscription syncs can also publish updates.
+5. **Send client traffic to the gateway.** Configure client DNS or a hosts entry for the routed domains, then access them over HTTPS.
+
+Provider credentials depend on the provider and protocol: OpenVPN may require service credentials and client certificates; WireGuard requires a private key and, where applicable, a tunnel address and preshared key. The UI shows the required fields.
+
+For automatic provider selection, a selected city determines the endpoint filter; otherwise the country is used. Each connection measures up to four candidate endpoints from container startup through a successful public-IP probe. It selects the fastest successful candidate and tries another successful candidate if the final connection fails. Each trial’s public-IP probe allows up to 40 seconds, with a five-minute limit for the overall connection process. Only the sampled candidates are compared. **Restart** repeats selection; **Check status** only probes the current endpoint. The displayed public IP is the measured VPN exit address, which can differ from the catalog endpoint IP.
+
+WireGuard environment YAML and OpenVPN YAML exports are application import/export formats, not standalone Compose files. See the [API reference](docs/API.md) for request examples.
+
+## Configuration
+
+Edit `.env` before installing or applying an update:
+
+| Variable | Default / behavior |
+| --- | --- |
+| `ADMIN_USERNAME` | `admin` on first install |
+| `ADMIN_PASSWORD` | Randomly generated on first install |
+| `JWT_SECRET` | Randomly generated on first install |
+| `TLS_IDLE_TIMEOUT` | `5m`; closes TLS connections after no traffic in either direction |
+| `EXIT_RESTART_CRON` | `@every 12h`; use `disabled` to turn off scheduled exit restarts |
+| `PROVIDER_CATALOG_UPDATE_INTERVAL` | `24h` |
+
+Published route snapshots and the provider catalog cache use the `published_routes` volume. PostgreSQL uses `postgres_data`. The backend accesses the Docker socket to create, inspect, and stop exit containers.
 
 ## Operations
 
 ```bash
+# Check for updates without changing the deployment
 ./sni-gateway.sh update --check
+
+# Back up PostgreSQL, update the tracked branch, rebuild, and wait for health
 ./sni-gateway.sh update --apply
+
+# Inspect the application and a VPN exit (replace EXIT_NAME)
+docker compose ps
+docker compose logs --tail=100 backend
+docker logs --tail=100 singbox-EXIT_NAME
+
+# Stop managed exits and the Compose stack
 ./scripts/stop.sh
-cd backend && go test ./...
-cd frontend && npm run build
 ```
 
-`update --apply` backs up PostgreSQL, fast-forwards the tracked branch, rebuilds images, and waits for Compose health. It does not automatically restart already-running VPN exits; restart exits in the UI to use a newer runtime image. The backend requires access to the Docker socket to manage exits. Backups and `.env` contain secrets and should be kept private.
+The updater preserves database and route volumes. Existing VPN containers keep their current runtime image until restarted; use **Restart** in the UI after an image update. See [application updates](docs/UPDATES.md) for unattended updates, backups, and recovery.
 
-The UI and sing-box provider selector use a pinned snapshot of [Gluetun servers data](https://github.com/qdm12/gluetun-servers) and check upstream daily. Country filters the city picker; a selected city overrides country, while Any city uses country. Every WireGuard and OpenVPN connection measures up to four candidate endpoints and uses the fastest successful one. Catalog IPs are VPN endpoints; the displayed public IP is measured after connection. Public OpenVPN provider CA and TLS templates are bundled from Gluetun's provider definitions; new exits use no Gluetun container. To refresh the bundled server fallback snapshot for releases, run `python3 scripts/update_provider_catalog.py /path/to/gluetun-servers`. Refresh the OpenVPN templates with `python3 scripts/update_openvpn_templates.py /path/to/gluetun` when provider definitions change, then run the sing-box configuration checks. License notices are in `backend/internal/catalog/data/LICENSE.gluetun-servers` and `backend/internal/provider/data/LICENSE.gluetun`.
+Compose health checks verify application readiness. They do not verify that a VPN can reach a destination. To test the full path, create and publish an exact rule for `api.ipify.org`, then run this command with your gateway's IP:
 
-The measurement covers container startup through the successful public-IP probe. If the fastest measured endpoint fails when selected for the final connection, the next successful candidate is tried. When more than four endpoints match, only four are sampled, so the result is not guaranteed to be the fastest in the full catalog. Each trial waits up to 40 seconds, and the complete connection is bounded to five minutes. **Check status** probes the current endpoint; use **Restart** to measure and select endpoints again. Existing running exits need a **Restart** after an application update to use the new selection rule.
+```bash
+curl --noproxy '*' --max-time 30 \
+  --resolve api.ipify.org:443:GATEWAY_IP https://api.ipify.org/
+```
 
-The application currently supports HTTPS over TCP with SNI. It does not proxy QUIC/HTTP3 or TLS clients without SNI. TLS connections idle in both directions close after five minutes by default; set `TLS_IDLE_TIMEOUT` in `.env` to change this duration. Docker is required for full integration testing; unit tests and the sing-box configuration checker do not establish a real VPN tunnel.
+The response should be the selected VPN's public IP. `--resolve` sends the connection to the gateway while preserving the destination hostname and TLS certificate verification.
+
+If Docker reports permission denied for its socket, check `docker info` and your current session's group membership. After an administrator grants Docker access, start a new login session so the group change takes effect. If the application is healthy but HTTPS fails, inspect the exit logs and use **Check status**; DNS or tunnel timeouts can prevent forwarding even while the container is running.
+
+## Development checks
+
+```bash
+(cd backend && go test -race ./... && go vet ./...)
+python3 -m unittest discover -s scripts/tests -v
+bash -n sni-gateway.sh
+(cd frontend && npm ci && npm run build)
+
+# Build the complete application using Docker
+docker compose build
+```
+
+Unit tests and image builds do not establish a real VPN tunnel. Full verification also requires a working VPN exit and a routed HTTPS request as shown above.
+
+## Scope
+
+The gateway supports HTTPS over TCP with SNI. It does not forward QUIC/HTTP3 or TLS connections without SNI. Plain HTTP is redirected to HTTPS only for matched domains. Idle TLS connections close according to `TLS_IDLE_TIMEOUT`, and active TLS connections close when the gateway shuts down.
+
+## Provider data and attribution
+
+The provider selector uses a bundled snapshot of [Gluetun servers data](https://github.com/qdm12/gluetun-servers) and checks for catalog updates at startup and on the configured interval. Public OpenVPN CA and TLS templates are derived from Gluetun provider definitions. VPN traffic is handled by sing-box.
+
+To refresh the bundled data from local upstream checkouts:
+
+```bash
+python3 scripts/update_provider_catalog.py /path/to/gluetun-servers
+python3 scripts/update_openvpn_templates.py /path/to/gluetun
+```
+
+License notices: [server catalog](backend/internal/catalog/data/LICENSE.gluetun-servers) and [provider templates](backend/internal/provider/data/LICENSE.gluetun). Older [release notes](docs/releases/v1.1.md) describe the architecture of those releases.
