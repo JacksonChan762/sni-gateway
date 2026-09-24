@@ -1,5 +1,6 @@
 # SNI Gateway
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [English](README.md)
 
 依照網域名稱，將 HTTPS 連線送往不同的 VPN 出口。SNI Gateway 使用 Go 入口，**供應商與自訂 VPN 出口皆由 sing-box 處理**，並提供網頁介面管理出口、路由規則、訂閱及發布。
@@ -135,6 +136,8 @@ docker compose build
 支援帶有 SNI 的 TCP HTTPS，不轉送 QUIC／HTTP3 或沒有 SNI 的 TLS 連線。一般 HTTP 僅對符合規則的網域重新導向 HTTPS。閒置 TLS 連線依 `TLS_IDLE_TIMEOUT` 關閉，閘道停止時也會關閉現有 TLS 連線。
 
 ## 授權
+
+Copyright (c) 2026 SNI Gateway contributors.
 
 SNI Gateway 原創程式碼採用 [MIT License](LICENSE)。第三方元件保留各自授權，
 詳見[第三方聲明](THIRD_PARTY_NOTICES.md)與

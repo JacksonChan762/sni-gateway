@@ -1,5 +1,6 @@
 # SNI Gateway
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [繁體中文](README.zh-TW.md)
 
 Route HTTPS connections to different VPN exits by domain name. SNI Gateway uses a Go ingress and **sing-box for both provider and custom VPN exits**, with a web UI for exits, routing rules, subscriptions, and publication.
@@ -135,6 +136,8 @@ Unit tests and image builds do not establish a real VPN tunnel. Full verificatio
 The gateway supports HTTPS over TCP with SNI. It does not forward QUIC/HTTP3 or TLS connections without SNI. Plain HTTP is redirected to HTTPS only for matched domains. Idle TLS connections close according to `TLS_IDLE_TIMEOUT`, and active TLS connections close when the gateway shuts down.
 
 ## License
+
+Copyright (c) 2026 SNI Gateway contributors.
 
 Original SNI Gateway code is licensed under the [MIT License](LICENSE).
 Third-party components retain their own licenses; see
