@@ -23,5 +23,9 @@ COPY --from=builder /sni-gateway .
 # Build the UI from the same source revision as the backend
 COPY --from=frontend /build/backend/public/ ./public/
 
+COPY LICENSE THIRD_PARTY_NOTICES.md ./licenses/
+COPY backend/internal/catalog/data/LICENSE.gluetun-servers ./licenses/
+COPY backend/internal/provider/data/LICENSE.gluetun ./licenses/
+
 EXPOSE 80 443 8080
 CMD ["./sni-gateway"]

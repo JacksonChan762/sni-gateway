@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import thirdPartyNotices from './build/third-party-notices.mjs'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), thirdPartyNotices()],
   server: {
     proxy: {
       '/api': {

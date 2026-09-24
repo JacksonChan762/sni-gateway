@@ -122,7 +122,7 @@ If Docker reports permission denied for its socket, check `docker info` and your
 (cd backend && go test -race ./... && go vet ./...)
 python3 -m unittest discover -s scripts/tests -v
 bash -n sni-gateway.sh
-(cd frontend && npm ci && npm run build)
+(cd frontend && npm ci && npm run test:licenses && npm run build)
 
 # Build the complete application using Docker
 docker compose build
@@ -133,6 +133,14 @@ Unit tests and image builds do not establish a real VPN tunnel. Full verificatio
 ## Scope
 
 The gateway supports HTTPS over TCP with SNI. It does not forward QUIC/HTTP3 or TLS connections without SNI. Plain HTTP is redirected to HTTPS only for matched domains. Idle TLS connections close according to `TLS_IDLE_TIMEOUT`, and active TLS connections close when the gateway shuts down.
+
+## License
+
+Original SNI Gateway code is licensed under the [MIT License](LICENSE).
+Third-party components retain their own licenses; see
+[third-party notices](THIRD_PARTY_NOTICES.md) and the
+[complete frontend license texts](backend/public/THIRD_PARTY_NOTICES.txt).
+sing-box is a separate component under GPL-3.0-or-later.
 
 ## Provider data and attribution
 

@@ -122,7 +122,7 @@ curl --noproxy '*' --max-time 30 \
 (cd backend && go test -race ./... && go vet ./...)
 python3 -m unittest discover -s scripts/tests -v
 bash -n sni-gateway.sh
-(cd frontend && npm ci && npm run build)
+(cd frontend && npm ci && npm run test:licenses && npm run build)
 
 # 透過 Docker 建置完整程式
 docker compose build
@@ -133,6 +133,13 @@ docker compose build
 ## 支援範圍
 
 支援帶有 SNI 的 TCP HTTPS，不轉送 QUIC／HTTP3 或沒有 SNI 的 TLS 連線。一般 HTTP 僅對符合規則的網域重新導向 HTTPS。閒置 TLS 連線依 `TLS_IDLE_TIMEOUT` 關閉，閘道停止時也會關閉現有 TLS 連線。
+
+## 授權
+
+SNI Gateway 原創程式碼採用 [MIT License](LICENSE)。第三方元件保留各自授權，
+詳見[第三方聲明](THIRD_PARTY_NOTICES.md)與
+[前端完整授權文字](backend/public/THIRD_PARTY_NOTICES.txt)。
+sing-box 是獨立元件，維持 GPL-3.0-or-later 授權。
 
 ## 供應商資料與授權
 
