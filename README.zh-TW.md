@@ -137,6 +137,8 @@ curl --noproxy '*' --max-time 30 \
 
 ## 開發驗證
 
+GitHub 上的 Verify 工作流程會執行後端測試、前端建置與授權檢查，以及部署腳本檢查。修改前端後，請將重新產生的 `backend/public` 檔案一併提交。
+
 ```bash
 (cd backend && go test -race ./... && go vet ./...)
 python3 -m unittest discover -s scripts/tests -v
@@ -146,6 +148,8 @@ bash -n sni-gateway.sh
 # 透過 Docker 建置完整程式
 docker compose build
 ```
+
+若要在本機執行 PostgreSQL 升級回歸測試，請先將 `SNI_GATEWAY_TEST_POSTGRES_DSN` 設為測試資料庫的 `postgres://` URL，再執行 Go 測試。資料庫使用者需要建立 schema 的權限，測試會建立並清除自己使用的 schema。
 
 單元測試與映像建置不會建立真實 VPN 通道。完整驗證還需要可用的 VPN 出口，以及上述經由規則轉送的 HTTPS 請求。
 

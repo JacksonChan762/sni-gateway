@@ -1,0 +1,91 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend and PostgreSQL migration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sni_gateway_test
+          POSTGRES_USER: sni_test
+          POSTGRES_PASSWORD: sni_test
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U sni_test -d sni_gateway_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Test packages with the race detector
+        run: go test -race -count=1 ./...
+        env:
+          SNI_GATEWAY_TEST_POSTGRES_DSN: postgres://sni_test:sni_test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/sni_gateway_test?sslmode=disable
+      - run: go vet ./...
+      - name: Build the Linux backend
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/sni-gateway" ./cmd/server
+
+  frontend:
+    name: Frontend build and bundled assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run test:licenses
+      - run: npm run build
+      - name: Verify checked-in frontend assets
+        working-directory: .
+        run: |
+          asset_changes=$(git status --porcelain --untracked-files=all -- backend/public)
+          if [[ -n "$asset_changes" ]]; then
+            printf '%s\n' "$asset_changes" >&2
+            echo 'Rebuild the frontend and commit the generated files in backend/public.' >&2
+            exit 1
+          fi
+
+  deployment:
+    name: Deployment scripts and Compose config
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash -n sni-gateway.sh
+      - run: python3 -m unittest discover -s scripts/tests -v
+      - run: docker compose config --quiet

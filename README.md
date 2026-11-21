@@ -137,6 +137,8 @@ If Docker reports permission denied for its socket, check `docker info` and your
 
 ## Development checks
 
+The Verify workflow runs the backend tests, frontend build and license checks, and deployment script checks on GitHub. After a frontend change, commit the regenerated files in `backend/public` along with the source change.
+
 ```bash
 (cd backend && go test -race ./... && go vet ./...)
 python3 -m unittest discover -s scripts/tests -v
@@ -146,6 +148,8 @@ bash -n sni-gateway.sh
 # Build the complete application using Docker
 docker compose build
 ```
+
+To run the PostgreSQL upgrade regression locally, set `SNI_GATEWAY_TEST_POSTGRES_DSN` to a `postgres://` URL for a test database before running the Go tests. The database user needs permission to create a schema. The test creates and removes its own schema.
 
 Unit tests and image builds do not establish a real VPN tunnel. Full verification also requires a working VPN exit and a routed HTTPS request as shown above.
 
