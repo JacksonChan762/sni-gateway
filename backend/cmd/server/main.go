@@ -5,6 +5,10 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
 	"sni-gateway/internal/api"
 	"sni-gateway/internal/catalog"
 	"sni-gateway/internal/config"
@@ -12,8 +16,6 @@ import (
 	"sni-gateway/internal/docker"
 	"sni-gateway/internal/gateway"
 	"sni-gateway/internal/services"
-	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -32,6 +34,17 @@ func main() {
 	idleTimeout, err := time.ParseDuration(cfg.TLSIdleTimeout)
 	if err != nil || idleTimeout <= 0 {
 		log.Fatalf("Invalid TLS_IDLE_TIMEOUT: %q", cfg.TLSIdleTimeout)
+	}
+	tlsMaxConnections := gateway.DefaultMaxConnections
+	if cfg.TLSMaxConnections != "" {
+		tlsMaxConnections, err = strconv.Atoi(cfg.TLSMaxConnections)
+		if err != nil || tlsMaxConnections <= 0 {
+			log.Fatalf("Invalid TLS_MAX_CONNECTIONS %q. Set it to a positive integer.", cfg.TLSMaxConnections)
+		}
+	}
+	ddnsInterval, err := time.ParseDuration(cfg.WireguardDDNSCheckInterval)
+	if err != nil || ddnsInterval < 0 {
+		log.Fatalf("Invalid WIREGUARD_DDNS_CHECK_INTERVAL: %q", cfg.WireguardDDNSCheckInterval)
 	}
 
 	// Wait for Postgres
@@ -68,19 +81,26 @@ func main() {
 	restartScheduler.Start()
 	defer restartScheduler.Stop()
 
-	server := api.NewServer(cfg, exitMgr, subMgr, cfgGen)
-
 	addr := ":" + cfg.Port
 	log.Printf("SNI Gateway backend starting on %s", addr)
 
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 	catalog.StartUpdater(ctx, cfg.ProviderCatalogPath, updateInterval)
-	ingress := &gateway.Server{Router: cfgGen, HTTPAddr: ":80", TLSAddr: ":443", IdleTimeout: idleTimeout}
+	ingress := &gateway.Server{
+		Router: cfgGen, HTTPAddr: ":80", TLSAddr: ":443",
+		IdleTimeout: idleTimeout, MaxConnections: tlsMaxConnections,
+	}
 	if err := ingress.Start(ctx); err != nil {
 		log.Fatalf("Start SNI ingress: %v", err)
 	}
 	defer ingress.Close()
+	ddnsDone := make(chan struct{})
+	go func() {
+		defer close(ddnsDone)
+		exitMgr.MonitorWireguardDDNS(ctx, ddnsInterval)
+	}()
+	server := api.NewServer(cfg, exitMgr, subMgr, cfgGen, ingress)
 	listenErr := make(chan error, 1)
 	go func() { listenErr <- server.Listen(addr) }()
 	select {
@@ -96,6 +116,8 @@ func main() {
 			log.Printf("HTTP shutdown: %v", err)
 		}
 	}
+	stopSignals()
+	<-ddnsDone
 	if sqlDB, err := db.DB.DB(); err == nil {
 		_ = sqlDB.Close()
 	}

@@ -61,7 +61,7 @@ Then open the same local URL. Keep `.env` and database backups private; they con
 
 1. **Create an exit.** Select a built-in provider, country or city, and WireGuard or OpenVPN. Enter the credentials requested by the form. To use your own VPN server, choose **Custom configuration** and import a WireGuard `.conf` or a portable OpenVPN `.ovpn` profile with its required certificates and keys.
 2. **Check the exit.** Startup probes the public IP through the VPN. **Running** indicates that the probe succeeded; **Unhealthy** indicates failure. **Logs** shows runtime output, and **Check status** probes the current connection again.
-3. **Add rules.** Map exact domains or domain suffixes to exits. The rules page supports search and pagination.
+3. **Add rules.** Map exact domains or domain suffixes to exits. Use **New folder** on the Rules page to organize manual rules, then choose a folder when adding or editing rules. You can filter by folder and search within it. Deleting a folder moves its rules to **Unfiled**.
 4. **Publish.** Validate and publish the saved rules from **Publish**. New connections immediately use the published table. Rollback restores the previous table. Subscription syncs can also publish updates.
 5. **Send client traffic to the gateway.** Configure client DNS or a hosts entry for the routed domains, then access them over HTTPS.
 
@@ -70,6 +70,20 @@ Provider credentials depend on the provider and protocol: OpenVPN may require se
 For automatic provider selection, a selected city determines the endpoint filter; otherwise the country is used. Each connection measures up to four candidate endpoints from container startup through a successful public-IP probe. It selects the fastest successful candidate and tries another successful candidate if the final connection fails. Each trial’s public-IP probe allows up to 40 seconds, with a five-minute limit for the overall connection process. Only the sampled candidates are compared. **Restart** repeats selection; **Check status** only probes the current endpoint. The displayed public IP is the measured VPN exit address, which can differ from the catalog endpoint IP.
 
 WireGuard environment YAML and OpenVPN YAML exports are application import/export formats, not standalone Compose files. See the [API reference](docs/API.md) for request examples.
+
+### Use a DDNS hostname for a WireGuard exit
+
+SNI Gateway connects as a WireGuard client to your VPN server. Choose **Custom configuration** and import your client profile (for example, `wg0.conf`) with this line in `[Peer]`.
+
+```ini
+Endpoint = vpn.example.com:51820
+```
+
+Use a DDNS hostname that resolves to an address the exit container can reach, and set the port to the server's WireGuard UDP port. You can also paste `vpn.example.com:51820` directly into **Endpoint address**. An AAAA-only hostname requires IPv6 connectivity from the exit container. sing-box resolves the peer hostname using the exit container's DNS and can look it up again when initiating a handshake. DNS for traffic sent through the exit goes through the VPN.
+
+The gateway checks active custom WireGuard hostname exits for DNS address changes. When the new DNS answer persists and two VPN probes fail, it attempts one restart of the affected container for that change. The first DNS result after backend startup establishes the comparison baseline. Use **Restart** to retry immediately.
+
+The import preserves `MTU` from `[Interface]` and `PersistentKeepalive` from `[Peer]`. Edit them under **Advanced settings**. An MTU suited to the path can help avoid fragmentation or stalls. Keepalive can keep a NAT mapping open during idle periods.
 
 ## Configuration
 
@@ -81,7 +95,9 @@ Edit `.env` before installing or applying an update:
 | `ADMIN_PASSWORD` | Randomly generated on first install |
 | `JWT_SECRET` | Randomly generated on first install |
 | `TLS_IDLE_TIMEOUT` | `5m`; closes TLS connections after no traffic in either direction |
+| `TLS_MAX_CONNECTIONS` | `2048`; maximum simultaneous TCP/TLS connections across all exits |
 | `EXIT_RESTART_CRON` | `@every 12h`; use `disabled` to turn off scheduled exit restarts |
+| `WIREGUARD_DDNS_CHECK_INTERVAL` | `30s`; set to `0` to disable automatic recovery after DNS changes |
 | `PROVIDER_CATALOG_UPDATE_INTERVAL` | `24h` |
 
 Published route snapshots and the provider catalog cache use the `published_routes` volume. PostgreSQL uses `postgres_data`. The backend accesses the Docker socket to create, inspect, and stop exit containers.
@@ -134,6 +150,8 @@ Unit tests and image builds do not establish a real VPN tunnel. Full verificatio
 ## Scope
 
 The gateway supports HTTPS over TCP with SNI. It does not forward QUIC/HTTP3 or TLS connections without SNI. Plain HTTP is redirected to HTTPS only for matched domains. Idle TLS connections close according to `TLS_IDLE_TIMEOUT`, and active TLS connections close when the gateway shuts down.
+
+The dashboard shows used TLS slots and the number of connections rejected at capacity since the backend started. Slots include connections waiting for a ClientHello or SOCKS connection. To test a higher limit, set `TLS_MAX_CONNECTIONS=4096` in `.env` and recreate the backend with `docker compose up -d --build backend`. Allow more than two open descriptors per established TLS connection in the backend process. At 4,096 established connections, the two relay buffers per connection account for about 256 MiB, in addition to socket, runtime, and VPN memory. Measure sustained traffic and bursts before using a higher limit in production.
 
 ## License
 
