@@ -49,6 +49,84 @@ func TestBuildExitConfigRoutesAndDNSOverVPN(t *testing.T) {
 	if strings.Contains(string(data), `"type":"direct"`) {
 		t.Fatal("unexpected direct outbound")
 	}
+	if len(dnsConfig["servers"].([]any)) != 1 {
+		t.Fatal("a literal endpoint should only need VPN DNS")
+	}
+}
+
+func TestBuildWireguardHostnameWithTuning(t *testing.T) {
+	exit := wireguardExit("0.0.0.0/0")
+	var raw map[string]string
+	if err := json.Unmarshal([]byte(exit.ConfigJSON), &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["wireguard_endpoint_ip"] = "vpn.example.net."
+	raw["wireguard_mtu"] = "1380"
+	raw["wireguard_persistent_keepalive_interval"] = "25"
+	encoded, _ := json.Marshal(raw)
+	exit.ConfigJSON = string(encoded)
+	data, err := BuildExitConfig(exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := config["endpoints"].([]any)[0].(map[string]any)
+	peer := endpoint["peers"].([]any)[0].(map[string]any)
+	if peer["address"] != "vpn.example.net." || peer["persistent_keepalive_interval"] != float64(25) || endpoint["mtu"] != float64(1380) {
+		t.Fatal("peer hostname or profile tuning was lost")
+	}
+	resolver := endpoint["domain_resolver"].(map[string]any)
+	if resolver["server"] != "bootstrap" || resolver["strategy"] != "prefer_ipv4" || resolver["disable_optimistic_cache"] != true {
+		t.Fatal("peer should resolve both families without using stale DNS answers")
+	}
+	dns := config["dns"].(map[string]any)
+	servers := dns["servers"].([]any)
+	bootstrap := servers[1].(map[string]any)
+	if dns["final"] != "vpn-dns" || dns["strategy"] != "ipv4_only" || servers[0].(map[string]any)["detour"] != "vpn" ||
+		bootstrap["type"] != "local" || bootstrap["tag"] != "bootstrap" || bootstrap["detour"] != nil {
+		t.Fatal("peer-only bootstrap DNS and VPN DNS must remain separate")
+	}
+	route := config["route"].(map[string]any)
+	if route["final"] != "vpn" || route["default_domain_resolver"] != "vpn-dns" {
+		t.Fatal("route and destination resolution must use the VPN")
+	}
+}
+
+func TestBuildWireguardEndpointAndTuningValidation(t *testing.T) {
+	for _, tt := range []struct {
+		field, value string
+		wantError    bool
+	}{
+		{"wireguard_endpoint_ip", "2001:db8::1", false},
+		{"wireguard_endpoint_ip", "vpn.example.net:51820", true},
+		{"wireguard_endpoint_ip", "https://vpn.example.net", true},
+		{"wireguard_endpoint_ip", "vpn..example.net", true},
+		{"wireguard_endpoint_ip", "999.0.0.1", true},
+		{"wireguard_mtu", "0", true},
+		{"wireguard_mtu", "65536", true},
+		{"wireguard_persistent_keepalive_interval", "off", false},
+		{"wireguard_persistent_keepalive_interval", "0", false},
+		{"wireguard_persistent_keepalive_interval", "25s", true},
+		{"wireguard_persistent_keepalive_interval", "65536", true},
+	} {
+		t.Run(tt.field+"/"+tt.value, func(t *testing.T) {
+			exit := wireguardExit("0.0.0.0/0")
+			var raw map[string]string
+			if err := json.Unmarshal([]byte(exit.ConfigJSON), &raw); err != nil {
+				t.Fatal(err)
+			}
+			raw[tt.field] = tt.value
+			encoded, _ := json.Marshal(raw)
+			exit.ConfigJSON = string(encoded)
+			_, err := BuildExitConfig(exit)
+			if tt.wantError && (err == nil || !strings.Contains(err.Error(), tt.field)) || !tt.wantError && err != nil {
+				t.Fatalf("unexpected validation result: %v", err)
+			}
+		})
+	}
 }
 
 func TestBuildExitConfigRejectsNonVPNOrIncompletePeer(t *testing.T) {

@@ -1,9 +1,9 @@
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   LayoutDashboard, ListFilter, Rss, Globe, Upload, Menu, X, LogOut, User,
 } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Dashboard from './pages/Dashboard'
 import Rules from './pages/Rules'
 import Subscriptions from './pages/Subscriptions'
@@ -27,15 +27,135 @@ const navItems = [
   { to: '/publish', label: 'Publish', icon: Upload },
 ]
 
+function Sidebar({ username, onLogout, onNavigate, onClose }: {
+  username: string
+  onLogout: () => void
+  onNavigate?: () => void
+  onClose?: () => void
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-3 border-b border-gray-800/80 px-5 py-5">
+        <div aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white">
+          S
+        </div>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-white">SNI Gateway</span>
+        {onClose && (
+          <button type="button" onClick={onClose} aria-label="Close navigation"
+            className="btn-ghost -mr-2 min-h-10 min-w-10 justify-center p-0">
+            <X size={19} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      <nav aria-label="Main navigation" className="flex-1 space-y-0.5 overflow-y-auto px-3 py-4">
+        {navItems.map(({ to, label, icon: Icon, end }) => (
+          <NavLink key={to} to={to} end={end} onClick={onNavigate}
+            className={({ isActive }) =>
+              `flex min-h-11 items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${
+                isActive
+                  ? 'border-indigo-600/30 bg-indigo-600/20 text-indigo-300'
+                  : 'border-transparent text-gray-400 hover:bg-gray-800/60 hover:text-white'
+              }`
+            }>
+            <Icon size={16} className="shrink-0" aria-hidden="true" />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
+      <div className="border-t border-gray-800/80 px-3 py-3">
+        <div className="flex items-center gap-2 rounded-xl bg-gray-800/40 px-3 py-1.5">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600/30">
+            <User size={13} className="text-indigo-400" aria-hidden="true" />
+          </div>
+          <span className="flex-1 truncate text-xs font-medium text-gray-300">{username}</span>
+          <button type="button" onClick={onLogout} className="btn-ghost min-h-10 min-w-10 justify-center p-0 hover:text-red-400"
+            title="Sign out" aria-label="Sign out">
+            <LogOut size={15} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Workspace({ username, onLogout }: { username: string; onLogout: () => void }) {
+  const { pathname } = useLocation()
+  const previousPath = useRef(pathname)
+  const drawer = useRef<HTMLDialogElement>(null)
+  const main = useRef<HTMLElement>(null)
+  const [mobileOpen, setMobileOpen] = useState(false)
+
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 768px)')
+    const closeOnDesktop = () => { if (desktop.matches) drawer.current?.close() }
+    desktop.addEventListener('change', closeOnDesktop)
+    return () => desktop.removeEventListener('change', closeOnDesktop)
+  }, [])
+
+  useEffect(() => {
+    if (previousPath.current === pathname) return
+    previousPath.current = pathname
+    drawer.current?.close()
+    main.current?.scrollTo({ top: 0 })
+    main.current?.focus({ preventScroll: true })
+  }, [pathname])
+
+  const closeNavigation = () => drawer.current?.close()
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-gray-950 supports-[height:100dvh]:h-[100dvh]">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-xl focus:bg-indigo-600 focus:px-4 focus:py-3 focus:text-white"
+        onClick={event => { event.preventDefault(); main.current?.focus() }}>
+        Skip to content
+      </a>
+      <aside className="hidden w-60 shrink-0 border-r border-gray-800/80 bg-gray-900 md:block">
+        <Sidebar username={username} onLogout={onLogout} />
+      </aside>
+      <dialog ref={drawer} id="mobile-navigation" aria-label="Navigation"
+        className="fixed inset-y-0 left-0 right-auto m-0 h-full max-h-none w-64 max-w-[85vw] overflow-hidden border-r border-gray-800 bg-gray-900 p-0 text-gray-100 backdrop:bg-black/60 md:hidden"
+        onClose={() => setMobileOpen(false)} onClick={event => { if (event.target === event.currentTarget) closeNavigation() }}>
+        <Sidebar username={username} onLogout={onLogout} onNavigate={closeNavigation} onClose={closeNavigation} />
+      </dialog>
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="flex shrink-0 items-center justify-between border-b border-gray-800 bg-gray-900 px-3 py-1.5 md:hidden">
+          <button type="button" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="mobile-navigation"
+            className="btn-ghost min-h-11 min-w-11 justify-center p-0"
+            onClick={event => {
+              event.currentTarget.focus()
+              drawer.current?.showModal()
+              setMobileOpen(true)
+            }}>
+            <Menu size={20} aria-hidden="true" />
+          </button>
+          <span className="font-semibold text-white">SNI Gateway</span>
+          <button type="button" aria-label="Sign out" onClick={onLogout} className="btn-ghost min-h-11 min-w-11 justify-center p-0 hover:text-red-400">
+            <LogOut size={17} aria-hidden="true" />
+          </button>
+        </header>
+
+        <main id="main-content" ref={main} tabIndex={-1} className="flex-1 overflow-y-auto">
+          <div className="max-w-6xl p-4 sm:p-6">
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/exits" element={<Exits />} />
+              <Route path="/rules" element={<Rules />} />
+              <Route path="/subscriptions" element={<Subscriptions />} />
+              <Route path="/publish" element={<Publish />} />
+            </Routes>
+          </div>
+        </main>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [auth, setAuth] = useState<AuthState | null>(loadAuth)
-  const [mobileOpen, setMobileOpen] = useState(false)
 
   // Listen for 401 events from the API client
   useEffect(() => {
     const handler = () => {
       setAuth(null)
-      setMobileOpen(false)
       queryClient.clear()
     }
     window.addEventListener('sni:logout', handler)
@@ -50,7 +170,6 @@ export default function App() {
   const handleLogout = () => {
     clearAuth()
     setAuth(null)
-    setMobileOpen(false)
     queryClient.clear()
   }
 
@@ -66,114 +185,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <BrowserRouter>
-          <div className="flex h-screen overflow-hidden bg-gray-950">
-            {/* Sidebar */}
-            <aside
-              className={`
-                fixed inset-y-0 left-0 z-40 w-60 bg-gray-900 border-r border-gray-800/80 flex flex-col
-                transform transition-transform duration-200
-                ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
-                md:relative md:translate-x-0
-              `}
-            >
-              {/* Logo */}
-              <div className="flex items-center gap-3 px-5 py-5 border-b border-gray-800/80">
-                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm shadow-lg shadow-indigo-900/40 flex-shrink-0">
-                  S
-                </div>
-                <div className="min-w-0">
-                  <div className="font-semibold text-white text-sm leading-tight">SNI Gateway</div>
-                  <div className="text-xs text-gray-500 truncate">Traffic Routing</div>
-                </div>
-              </div>
-
-              {/* Nav */}
-              <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-                {navItems.map(({ to, label, icon: Icon, end }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    end={end}
-                    onClick={() => setMobileOpen(false)}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                        isActive
-                          ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-600/30'
-                          : 'text-gray-400 hover:text-white hover:bg-gray-800/60 border border-transparent'
-                      }`
-                    }
-                  >
-                    <Icon size={16} className="flex-shrink-0" />
-                    {label}
-                  </NavLink>
-                ))}
-              </nav>
-
-              {/* User / Logout */}
-              <div className="px-3 py-3 border-t border-gray-800/80">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-gray-800/40">
-                  <div className="w-7 h-7 rounded-full bg-indigo-600/30 flex items-center justify-center flex-shrink-0">
-                    <User size={13} className="text-indigo-400" />
-                  </div>
-                  <span className="text-xs text-gray-300 flex-1 truncate font-medium">
-                    {auth.username}
-                  </span>
-                  <button
-                    onClick={handleLogout}
-                    className="text-gray-500 hover:text-red-400 transition-colors p-1"
-                    title="Sign out"
-                    aria-label="Sign out"
-                  >
-                    <LogOut size={14} />
-                  </button>
-                </div>
-              </div>
-            </aside>
-
-            {/* Mobile overlay */}
-            {mobileOpen && (
-              <div
-                className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm md:hidden"
-                onClick={() => setMobileOpen(false)}
-              />
-            )}
-
-            {/* Main content */}
-            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-              {/* Mobile header */}
-              <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-900 flex-shrink-0">
-                <button
-                  aria-label="Open navigation"
-                  aria-expanded={mobileOpen}
-                  onClick={() => setMobileOpen(true)}
-                  className="text-gray-400 hover:text-white transition-colors p-1"
-                >
-                  <Menu size={20} />
-                </button>
-                <span className="font-semibold text-white">SNI Gateway</span>
-                <button
-                  aria-label="Sign out"
-                  onClick={handleLogout}
-                  className="text-gray-500 hover:text-red-400 transition-colors p-1"
-                >
-                  <LogOut size={16} />
-                </button>
-              </header>
-
-              {/* Page content */}
-              <main className="flex-1 overflow-y-auto">
-                <div className="p-4 sm:p-6 max-w-6xl">
-                  <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/exits" element={<Exits />} />
-                    <Route path="/rules" element={<Rules />} />
-                    <Route path="/subscriptions" element={<Subscriptions />} />
-                    <Route path="/publish" element={<Publish />} />
-                  </Routes>
-                </div>
-              </main>
-            </div>
-          </div>
+          <Workspace username={auth.username} onLogout={handleLogout} />
         </BrowserRouter>
       </ToastProvider>
     </QueryClientProvider>

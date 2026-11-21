@@ -63,6 +63,9 @@ type CreateExitRequest struct {
 	OpenVPNKeyPassphrase  string `json:"openvpn_key_passphrase"`
 	ConfigYAML            string `json:"config_yaml"`
 	Enabled               *bool  `json:"enabled"`
+
+	WireguardMTU       *string `json:"wireguard_mtu"`
+	WireguardKeepalive *string `json:"wireguard_persistent_keepalive_interval"`
 }
 
 var exitNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
@@ -268,6 +271,12 @@ func (h *ExitHandler) Update(c *fiber.Ctx) error {
 		if req.WireguardDNS != "" {
 			creds["wireguard_dns"] = req.WireguardDNS
 		}
+		if req.WireguardMTU != nil {
+			creds["wireguard_mtu"] = *req.WireguardMTU
+		}
+		if req.WireguardKeepalive != nil {
+			creds["wireguard_persistent_keepalive_interval"] = *req.WireguardKeepalive
+		}
 		if req.OpenVPNUser != "" {
 			creds["openvpn_user"] = req.OpenVPNUser
 		}
@@ -354,6 +363,7 @@ func parseExitCredentials(raw string) map[string]string {
 		{"WIREGUARD_ENDPOINT_IP", "wireguard_endpoint_ip"}, {"WIREGUARD_ENDPOINT_PORT", "wireguard_endpoint_port"},
 		{"WIREGUARD_PRESHARED_KEY", "wireguard_preshared_key"}, {"WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"},
 		{"WIREGUARD_ADDRESSES", "wireguard_addresses"}, {"WIREGUARD_DNS", "wireguard_dns"},
+		{"WIREGUARD_MTU", "wireguard_mtu"}, {"WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL", "wireguard_persistent_keepalive_interval"},
 		{"OPENVPN_USER", "openvpn_user"}, {"OPENVPN_PASSWORD", "openvpn_password"},
 		{"OPENVPN_PROFILE", "openvpn_profile"},
 		{"OPENVPN_CERT", "openvpn_cert"}, {"OPENVPN_KEY", "openvpn_key"}, {"OPENVPN_KEY_PASSPHRASE", "openvpn_key_passphrase"},
@@ -392,7 +402,7 @@ func validateExitRequest(req CreateExitRequest) error {
 			_, err = singbox.BuildExitConfig(exit)
 			return err
 		}
-		if !auto && req.WireguardEndpointIP == "" {
+		if strings.TrimSpace(req.WireguardEndpointIP) == "" {
 			return fmt.Errorf("wireguard_endpoint_ip is required for custom wireguard exits")
 		}
 		if req.WireguardEndpointPort == "" {
@@ -406,11 +416,6 @@ func validateExitRequest(req CreateExitRequest) error {
 		}
 		if req.WireguardAddresses == "" {
 			return fmt.Errorf("wireguard_addresses is required for custom wireguard exits")
-		}
-		if !auto {
-			if _, err := netip.ParseAddr(req.WireguardEndpointIP); err != nil {
-				return fmt.Errorf("wireguard_endpoint_ip must be an IP address for custom wireguard exits")
-			}
 		}
 		port, err := strconv.Atoi(req.WireguardEndpointPort)
 		if err != nil || port < 1 || port > 65535 {
@@ -517,6 +522,12 @@ func validateExitConfig(exit *models.Exit) error {
 		OpenVPNKey:            firstConfigValue(env, raw, "OPENVPN_KEY", "openvpn_key"),
 		OpenVPNKeyPassphrase:  firstConfigValue(env, raw, "OPENVPN_KEY_PASSPHRASE", "openvpn_key_passphrase"),
 	}
+	if value := firstConfigValue(env, raw, "WIREGUARD_MTU", "wireguard_mtu"); value != "" {
+		req.WireguardMTU = &value
+	}
+	if value := firstConfigValue(env, raw, "WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL", "wireguard_persistent_keepalive_interval"); value != "" {
+		req.WireguardKeepalive = &value
+	}
 	if value, err := strconv.ParseBool(firstConfigValue(env, raw, "AUTO_SERVER", "auto_server")); err == nil {
 		req.AutoServer = &value
 	}
@@ -558,6 +569,8 @@ func normalizeExitConfig(exit *models.Exit) error {
 		{"WIREGUARD_ALLOWED_IPS", "wireguard_allowed_ips"},
 		{"WIREGUARD_ADDRESSES", "wireguard_addresses"},
 		{"WIREGUARD_DNS", "wireguard_dns"},
+		{"WIREGUARD_MTU", "wireguard_mtu"},
+		{"WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL", "wireguard_persistent_keepalive_interval"},
 		{"AUTO_SERVER", "auto_server"},
 	} {
 		if value := firstConfigValue(env, raw, pair[0], pair[1]); value != "" {
@@ -644,6 +657,12 @@ func applyYAMLToExitRequest(req *CreateExitRequest) error {
 	}
 	if v := getString("wireguard_dns"); v != "" {
 		req.WireguardDNS = v
+	}
+	if v := getString("wireguard_mtu"); v != "" {
+		req.WireguardMTU = &v
+	}
+	if v := getString("wireguard_persistent_keepalive_interval"); v != "" {
+		req.WireguardKeepalive = &v
 	}
 	if v := getString("openvpn_user"); v != "" {
 		req.OpenVPNUser = v
@@ -749,6 +768,12 @@ func applyComposeStyleConfig(raw map[string]interface{}, req *CreateExitRequest)
 	if v := env["WIREGUARD_DNS"]; v != "" {
 		req.WireguardDNS = v
 	}
+	if v := env["WIREGUARD_MTU"]; v != "" {
+		req.WireguardMTU = &v
+	}
+	if v := env["WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL"]; v != "" {
+		req.WireguardKeepalive = &v
+	}
 	if v := env["OPENVPN_USER"]; v != "" {
 		req.OpenVPNUser = v
 	}
@@ -846,6 +871,12 @@ func buildExitConfigJSON(req CreateExitRequest) (string, error) {
 	if req.WireguardDNS != "" {
 		raw["wireguard_dns"] = req.WireguardDNS
 	}
+	if req.WireguardMTU != nil {
+		raw["wireguard_mtu"] = *req.WireguardMTU
+	}
+	if req.WireguardKeepalive != nil {
+		raw["wireguard_persistent_keepalive_interval"] = *req.WireguardKeepalive
+	}
 	if req.OpenVPNUser != "" {
 		raw["openvpn_user"] = req.OpenVPNUser
 	}
@@ -905,6 +936,8 @@ func buildExitConfigYAML(exit *models.Exit) (string, error) {
 	copyRawString(raw, envMap, "wireguard_allowed_ips", "WIREGUARD_ALLOWED_IPS")
 	copyRawString(raw, envMap, "wireguard_addresses", "WIREGUARD_ADDRESSES")
 	copyRawString(raw, envMap, "wireguard_dns", "WIREGUARD_DNS")
+	copyRawString(raw, envMap, "wireguard_mtu", "WIREGUARD_MTU")
+	copyRawString(raw, envMap, "wireguard_persistent_keepalive_interval", "WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL")
 	copyRawString(raw, envMap, "openvpn_user", "OPENVPN_USER")
 	copyRawString(raw, envMap, "openvpn_password", "OPENVPN_PASSWORD")
 

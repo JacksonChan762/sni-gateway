@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -159,9 +162,156 @@ func TestCloseReleasesPendingTLSConnections(t *testing.T) {
 	if _, err := conn.Read(make([]byte, 1)); err == nil {
 		t.Fatal("connection stayed open after server shutdown")
 	}
-	if got := len(server.slots); got != 0 {
+	if got := server.TLSStats().Active; got != 0 {
 		t.Fatalf("%d TLS slots still occupied", got)
 	}
+}
+
+func TestTLSConnectionLimitAndStats(t *testing.T) {
+	server := &Server{Router: noRoutes{}, HTTPAddr: "127.0.0.1:0", TLSAddr: "127.0.0.1:0", MaxConnections: 2}
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+	serverAddr := server.listener.Addr().String()
+	dial := func() net.Conn {
+		t.Helper()
+		conn, err := net.DialTimeout("tcp", serverAddr, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	}
+	first := dial()
+	dial()
+	waitForTLSStats(t, server, TLSStats{Active: 2, Limit: 2})
+
+	rejected := dial()
+	if err := rejected.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := rejected.Read(make([]byte, 1))
+	var networkError net.Error
+	if err == nil || (errors.As(err, &networkError) && networkError.Timeout()) {
+		t.Fatalf("expected the extra TLS connection to close immediately, got %v", err)
+	}
+	waitForTLSStats(t, server, TLSStats{Active: 2, Limit: 2, Rejected: 1})
+
+	first.Close()
+	waitForTLSStats(t, server, TLSStats{Active: 1, Limit: 2, Rejected: 1})
+	dial()
+	waitForTLSStats(t, server, TLSStats{Active: 2, Limit: 2, Rejected: 1})
+	server.Close()
+	waitForTLSStats(t, server, TLSStats{Limit: 2, Rejected: 1})
+}
+
+func waitForTLSStats(t *testing.T, server *Server, want TLSStats) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		got := server.TLSStats()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("TLS stats = %+v, want %+v", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestTLSConnectionLimitDefaultAndInvalid(t *testing.T) {
+	server := &Server{}
+	if got := server.TLSStats(); got != (TLSStats{Limit: 2048}) {
+		t.Fatalf("default stats = %+v", got)
+	}
+	server = &Server{MaxConnections: -1, TLSAddr: "127.0.0.1:0", HTTPAddr: "127.0.0.1:0"}
+	if err := server.Start(context.Background()); err == nil {
+		server.Close()
+		t.Fatal("negative TLS connection limit accepted")
+	}
+}
+
+type scriptedTLSListener struct {
+	net.Listener
+	accept func() (net.Conn, error)
+}
+
+func (l scriptedTLSListener) Accept() (net.Conn, error) { return l.accept() }
+
+func TestTLSAcceptRecoversFromTemporaryResourceErrors(t *testing.T) {
+	server := &Server{Router: noRoutes{}, active: make(map[net.Conn]net.Conn), limit: 1}
+	t.Cleanup(server.Close)
+	client, conn := net.Pipe()
+	t.Cleanup(func() { client.Close() })
+	var calls int
+	transient := []error{syscall.EMFILE, syscall.ENFILE, syscall.ENOBUFS, syscall.ENOMEM}
+	listener := scriptedTLSListener{accept: func() (net.Conn, error) {
+		calls++
+		if calls <= len(transient) {
+			return nil, &net.OpError{Op: "accept", Net: "tcp", Err: os.NewSyscallError("accept", transient[calls-1])}
+		}
+		if calls == len(transient)+1 {
+			return conn, nil
+		}
+		return nil, net.ErrClosed
+	}}
+	server.serveTLS(context.Background(), listener)
+	if calls != len(transient)+2 {
+		t.Fatalf("accept called %d times, want %d", calls, len(transient)+2)
+	}
+	if got := server.TLSStats(); got != (TLSStats{Active: 1, Limit: 1}) {
+		t.Fatalf("expected the next connection to be admitted after recovery, got %+v", got)
+	}
+}
+
+func TestTLSAcceptStopsOnCancellationOrPermanentError(t *testing.T) {
+	t.Run("cancellation", func(t *testing.T) {
+		server := &Server{}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		firstAttempt := make(chan struct{})
+		finished := make(chan struct{})
+		listener := scriptedTLSListener{accept: func() (net.Conn, error) {
+			select {
+			case <-firstAttempt:
+			default:
+				close(firstAttempt)
+			}
+			return nil, syscall.EMFILE
+		}}
+		go func() {
+			defer close(finished)
+			server.serveTLS(ctx, listener)
+		}()
+		select {
+		case <-firstAttempt:
+		case <-time.After(time.Second):
+			t.Fatal("listener never attempted to accept")
+		}
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("accept loop did not stop after cancellation")
+		}
+	})
+	t.Run("permanent error", func(t *testing.T) {
+		server := &Server{}
+		calls := 0
+		listener := scriptedTLSListener{accept: func() (net.Conn, error) {
+			calls++
+			if calls > 1 {
+				t.Fatal("permanent accept error was retried")
+			}
+			return nil, errors.New("permanent listener failure")
+		}}
+		server.serveTLS(context.Background(), listener)
+		if calls != 1 {
+			t.Fatalf("accept called %d times, want 1", calls)
+		}
+	})
 }
 
 func TestIdleWatcherClosesBothConnections(t *testing.T) {
@@ -243,5 +393,32 @@ func TestActivityConnPreservesTCPHalfClose(t *testing.T) {
 	var response [1]byte
 	if _, err := client.Read(response[:]); err != nil || response[0] != 'x' {
 		t.Fatalf("reverse traffic stopped after half-close: %q, %v", response, err)
+	}
+}
+
+func BenchmarkRelayCopy(b *testing.B) {
+	payload := make([]byte, 64*1024)
+	for _, tt := range []struct {
+		name string
+		copy func(io.Writer, io.Reader) (int64, error)
+	}{
+		{"unpooled", io.Copy},
+		{"pooled", copyTraffic},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			var reader bytes.Reader
+			// The relay's activityConn exposes Read and Write without the io.Copy fast paths.
+			src := &struct{ io.Reader }{&reader}
+			dst := &struct{ io.Writer }{io.Discard}
+			b.SetBytes(int64(len(payload)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				reader.Reset(payload)
+				if n, err := tt.copy(dst, src); n != int64(len(payload)) || err != nil {
+					b.Fatalf("copied %d of %d bytes: %v", n, len(payload), err)
+				}
+			}
+		})
 	}
 }
