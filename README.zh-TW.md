@@ -120,6 +120,8 @@ docker logs --tail=100 singbox-EXIT_NAME
 ./scripts/stop.sh
 ```
 
+從舊版就地升級到功能分支，請參閱[切換部署分支](docs/UPDATES.md#switch-an-existing-deployment-to-another-branch)。
+
 更新程式會保留資料庫及路由 volume。現有 VPN 容器會繼續使用原本映像，直到重新啟動；更新映像後，請在介面使用 **Restart**。自動更新、備份與復原方式見[更新文件](docs/UPDATES.md)。
 
 Compose 健康檢查確認程式是否就緒，並不驗證 VPN 能否連至目的網站。若要測試完整路徑，先建立並發布 `api.ipify.org` 的精確規則，再將下列 `GATEWAY_IP` 換成閘道 IP 後執行：

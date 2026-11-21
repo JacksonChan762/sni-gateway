@@ -120,6 +120,8 @@ docker logs --tail=100 singbox-EXIT_NAME
 ./scripts/stop.sh
 ```
 
+For an in-place upgrade to the feature branch, see [switching an existing deployment to another branch](docs/UPDATES.md#switch-an-existing-deployment-to-another-branch).
+
 The updater preserves database and route volumes. Existing VPN containers keep their current runtime image until restarted; use **Restart** in the UI after an image update. See [application updates](docs/UPDATES.md) for unattended updates, backups, and recovery.
 
 Compose health checks verify application readiness. They do not verify that a VPN can reach a destination. To test the full path, create and publish an exact rule for `api.ipify.org`, then run this command with your gateway's IP:
