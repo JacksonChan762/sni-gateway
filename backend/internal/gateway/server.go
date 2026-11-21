@@ -3,8 +3,6 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -12,65 +10,28 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
 type Router interface{ ExitName(host string) string }
 
-// DefaultMaxConnections is the admission limit when no custom limit is set.
-const DefaultMaxConnections = 2048
-
-// TLSStats counts admitted connections and rejections by the TLS admission limit.
-type TLSStats struct {
-	Active   int    `json:"active"`
-	Limit    int    `json:"limit"`
-	Rejected uint64 `json:"rejected"`
-}
-
 // Server accepts clear HTTP redirects and TLS passthrough on separate ports.
 type Server struct {
-	Router         Router
-	HTTPAddr       string
-	TLSAddr        string
-	IdleTimeout    time.Duration
-	MaxConnections int // Zero selects DefaultMaxConnections.
-
+	Router       Router
+	HTTPAddr     string
+	TLSAddr      string
+	IdleTimeout  time.Duration
 	http         *http.Server
 	listener     net.Listener
 	httpListener net.Listener
-	cancelAccept context.CancelFunc
 	mu           sync.Mutex
 	active       map[net.Conn]net.Conn
 	closed       bool
-	limit        int
-	rejected     uint64
 	wg           sync.WaitGroup
-}
-
-func (s *Server) connectionLimit() int {
-	if s.MaxConnections == 0 {
-		return DefaultMaxConnections
-	}
-	return s.MaxConnections
-}
-
-// TLSStats returns a snapshot for this server process. Active includes handshakes.
-func (s *Server) TLSStats() TLSStats {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	limit := s.limit
-	if limit == 0 {
-		limit = s.connectionLimit()
-	}
-	return TLSStats{Active: len(s.active), Limit: limit, Rejected: s.rejected}
+	slots        chan struct{}
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	limit := s.connectionLimit()
-	if limit < 0 {
-		return fmt.Errorf("maximum TLS connections must be non-negative, got %d", limit)
-	}
 	listener, err := net.Listen("tcp", s.TLSAddr)
 	if err != nil {
 		return err
@@ -81,114 +42,63 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 	s.mu.Lock()
-	if s.closed || s.listener != nil {
-		closed := s.closed
+	if s.closed {
 		s.mu.Unlock()
 		listener.Close()
 		httpListener.Close()
-		if closed {
-			return net.ErrClosed
-		}
-		return errors.New("gateway already started")
+		return net.ErrClosed
 	}
-	acceptCtx, cancelAccept := context.WithCancel(ctx)
-	httpServer := &http.Server{Addr: s.HTTPAddr, ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(s.redirect)}
 	s.listener = listener
 	s.httpListener = httpListener
-	s.cancelAccept = cancelAccept
 	s.active = make(map[net.Conn]net.Conn)
-	s.limit = limit
-	s.http = httpServer
-	s.wg.Add(1)
+	s.http = &http.Server{Addr: s.HTTPAddr, ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(s.redirect)}
 	s.mu.Unlock()
+	s.slots = make(chan struct{}, 2048)
 	go func() {
-		if err := httpServer.Serve(httpListener); err != nil && err != http.ErrServerClosed {
+		if err := s.http.Serve(httpListener); err != nil && err != http.ErrServerClosed {
 			log.Printf("HTTP ingress failed: %v", err)
 		}
 	}()
+	go func() { <-ctx.Done(); s.Close() }()
 	go func() {
-		<-acceptCtx.Done()
-		if ctx.Err() != nil {
-			s.Close()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			select {
+			case s.slots <- struct{}{}:
+				s.mu.Lock()
+				if s.closed {
+					s.mu.Unlock()
+					<-s.slots
+					conn.Close()
+					return
+				}
+				s.active[conn] = nil
+				s.wg.Add(1)
+				s.mu.Unlock()
+				go func() {
+					defer func() {
+						s.mu.Lock()
+						delete(s.active, conn)
+						s.mu.Unlock()
+						<-s.slots
+						s.wg.Done()
+					}()
+					s.handleTLS(conn)
+				}()
+			default:
+				conn.Close()
+			}
 		}
-	}()
-	go func() {
-		defer s.wg.Done()
-		s.serveTLS(acceptCtx, listener)
 	}()
 	return nil
-}
-
-func (s *Server) serveTLS(ctx context.Context, listener net.Listener) {
-	var retryDelay time.Duration
-	for ctx.Err() == nil {
-		conn, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				return
-			}
-			if !retryableAcceptError(err) {
-				log.Printf("TLS ingress failed: %v", err)
-				return
-			}
-			if retryDelay == 0 {
-				retryDelay = 5 * time.Millisecond
-			} else {
-				retryDelay = min(retryDelay*2, time.Second)
-			}
-			log.Printf("TLS ingress accept failed: %v, retrying in %s", err, retryDelay)
-			timer := time.NewTimer(retryDelay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-				continue
-			}
-		}
-		retryDelay = 0
-		s.mu.Lock()
-		if s.closed || ctx.Err() != nil {
-			s.mu.Unlock()
-			conn.Close()
-			return
-		}
-		if len(s.active) >= s.limit {
-			s.rejected++
-			s.mu.Unlock()
-			conn.Close()
-			continue
-		}
-		s.active[conn] = nil
-		s.wg.Add(1)
-		s.mu.Unlock()
-		go func() {
-			defer func() {
-				s.mu.Lock()
-				delete(s.active, conn)
-				s.mu.Unlock()
-				s.wg.Done()
-			}()
-			s.handleTLS(ctx, conn)
-		}()
-	}
-}
-
-func retryableAcceptError(err error) bool {
-	if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) ||
-		errors.Is(err, syscall.ENOBUFS) || errors.Is(err, syscall.ENOMEM) {
-		return true
-	}
-	var networkError net.Error
-	return errors.As(err, &networkError) && networkError.Temporary()
 }
 
 func (s *Server) Close() {
 	s.mu.Lock()
 	s.closed = true
-	if s.cancelAccept != nil {
-		s.cancelAccept()
-	}
 	listener, httpListener, httpServer := s.listener, s.httpListener, s.http
 	s.listener, s.httpListener = nil, nil
 	connections := make([]net.Conn, 0, len(s.active)*2)
@@ -228,7 +138,7 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
 }
 
-func (s *Server) handleTLS(ctx context.Context, in net.Conn) {
+func (s *Server) handleTLS(in net.Conn) {
 	defer in.Close()
 	host, preface, err := ReadServerName(in)
 	if err != nil {
@@ -238,11 +148,9 @@ func (s *Server) handleTLS(ctx context.Context, in net.Conn) {
 	if exit == "" {
 		return
 	}
-	out, err := DialSOCKSContext(ctx, "singbox-"+exit+":1080", host, 443)
+	out, err := DialSOCKS("singbox-"+exit+":1080", host, 443)
 	if err != nil {
-		if ctx.Err() == nil {
-			log.Printf("exit %s dial failed: %v", exit, err)
-		}
+		log.Printf("exit %s dial failed: %v", exit, err)
 		return
 	}
 	defer out.Close()
@@ -264,28 +172,18 @@ func (s *Server) handleTLS(ctx context.Context, in net.Conn) {
 	}
 	done := make(chan struct{})
 	go func() {
-		copyTraffic(out, in)
+		io.Copy(out, in)
 		if half, ok := out.(interface{ CloseWrite() error }); ok {
 			half.CloseWrite()
 		}
 		close(done)
 	}()
-	copyTraffic(in, out)
+	io.Copy(in, out)
 	if half, ok := in.(interface{ CloseWrite() error }); ok {
 		half.CloseWrite()
 	}
 	in.Close()
 	<-done
-}
-
-const trafficBufferSize = 32 * 1024
-
-var trafficBuffers = sync.Pool{New: func() any { return new([trafficBufferSize]byte) }}
-
-func copyTraffic(dst io.Writer, src io.Reader) (int64, error) {
-	buffer := trafficBuffers.Get().(*[trafficBufferSize]byte)
-	defer trafficBuffers.Put(buffer)
-	return io.CopyBuffer(dst, src, buffer[:])
 }
 
 // watchIdle closes both sides when neither direction transfers data.

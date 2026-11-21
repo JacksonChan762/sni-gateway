@@ -69,8 +69,7 @@ func (p *RoutePublisher) snapshot() ([]byte, error) {
 	var snapshot routeSnapshot
 	var configuredExits []models.Exit
 	err := db.DB.Transaction(func(tx *gorm.DB) error {
-		// Folder assignments belong to the Rules page and carry no routing settings.
-		if err := tx.Omit("FolderID").Where("enabled = true").Order("priority DESC, id ASC").Find(&snapshot.Rules).Error; err != nil {
+		if err := tx.Where("enabled = true").Order("priority DESC, id ASC").Find(&snapshot.Rules).Error; err != nil {
 			return err
 		}
 		return tx.Where("enabled = true").Order("id ASC").Find(&configuredExits).Error

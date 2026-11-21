@@ -1,11 +1,9 @@
 package api
 
 import (
-	"time"
-
 	"sni-gateway/internal/config"
-	"sni-gateway/internal/gateway"
 	"sni-gateway/internal/services"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -21,10 +19,9 @@ type Server struct {
 	publish *PublishHandler
 	login   *LoginHandler
 	cfg     *config.Config
-	ingress *gateway.Server
 }
 
-func NewServer(cfg *config.Config, exitMgr *services.ExitManager, subMgr *services.SubscriptionManager, cfgGen services.Publisher, ingress *gateway.Server) *Server {
+func NewServer(cfg *config.Config, exitMgr *services.ExitManager, subMgr *services.SubscriptionManager, cfgGen services.Publisher) *Server {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -49,7 +46,6 @@ func NewServer(cfg *config.Config, exitMgr *services.ExitManager, subMgr *servic
 		publish: NewPublishHandler(cfgGen),
 		login:   NewLoginHandler(cfg.JWTSecret, cfg.AdminUsername, cfg.AdminPassword),
 		cfg:     cfg,
-		ingress: ingress,
 	}
 
 	s.registerRoutes()
@@ -73,10 +69,6 @@ func (s *Server) registerRoutes() {
 
 	// Rules
 	api.Get("/rules", s.rules.List)
-	api.Get("/rule-folders", listRuleFolders)
-	api.Post("/rule-folders", createRuleFolder)
-	api.Put("/rule-folders/:id", updateRuleFolder)
-	api.Delete("/rule-folders/:id", deleteRuleFolder)
 	api.Post("/rules", s.rules.Create)
 	api.Post("/rules/test", s.rules.Test)
 	api.Post("/rules/bulk", s.rules.CreateBulk)
@@ -120,6 +112,10 @@ func (s *Server) registerRoutes() {
 	s.app.Get("/*", func(c *fiber.Ctx) error {
 		return c.SendFile("./public/index.html")
 	})
+}
+
+func (s *Server) dashboardStats(c *fiber.Ctx) error {
+	return getDashboardStats(c)
 }
 
 func (s *Server) Listen(addr string) error {

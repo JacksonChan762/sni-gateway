@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -14,22 +13,6 @@ import (
 	"sni-gateway/internal/models"
 	"sni-gateway/internal/provider"
 )
-
-var wireguardHostnameLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
-
-// WireGuard accepts an IP literal or a hostname, with the port supplied separately.
-func validWireguardHostname(host string) bool {
-	host = strings.TrimSuffix(host, ".")
-	if len(host) == 0 || len(host) > 253 || strings.Trim(host, "0123456789.") == "" {
-		return false
-	}
-	for _, label := range strings.Split(host, ".") {
-		if !wireguardHostnameLabel.MatchString(label) {
-			return false
-		}
-	}
-	return true
-}
 
 // BuildExitConfig creates an isolated SOCKS ingress whose only route is the VPN.
 func BuildExitConfig(exit models.Exit) ([]byte, error) {
@@ -66,10 +49,8 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 			portText = strconv.Itoa(int(port))
 		}
 	}
-	_, ipErr := netip.ParseAddr(endpoint)
-	hasHostname := ipErr != nil
-	if hasHostname && !validWireguardHostname(endpoint) {
-		return nil, errors.New("wireguard_endpoint_ip must be an IP address or DNS hostname without a port")
+	if _, err := netip.ParseAddr(endpoint); err != nil {
+		return nil, errors.New("WireGuard endpoint IP is required")
 	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1 || port > 65535 {
@@ -126,41 +107,14 @@ func BuildExitConfig(exit models.Exit) ([]byte, error) {
 		}
 		peer["pre_shared_key"] = key
 	}
-	if value := field("wireguard_persistent_keepalive_interval"); value != "" && !strings.EqualFold(value, "off") {
-		interval, err := strconv.ParseUint(value, 10, 16)
-		if err != nil {
-			return nil, errors.New("wireguard_persistent_keepalive_interval must be 0–65535 seconds or off")
-		}
-		peer["persistent_keepalive_interval"] = interval
-	}
-	wireguard := map[string]any{"type": "wireguard", "tag": "vpn", "address": addresses, "private_key": privateKey, "peers": []any{peer}}
-	if value := field("wireguard_mtu"); value != "" {
-		mtu, err := strconv.ParseUint(value, 10, 16)
-		minMTU := uint64(68)
-		if hasIPv6 {
-			minMTU = 1280
-		}
-		if err != nil || mtu < minMTU {
-			return nil, fmt.Errorf("wireguard_mtu must be %d–65535 bytes", minMTU)
-		}
-		wireguard["mtu"] = mtu
-	}
-	servers := []any{dns}
-	if hasHostname {
-		// Resolve the peer before the tunnel is usable. Leave destination DNS in the VPN.
-		servers = append(servers, map[string]any{"type": "local", "tag": "bootstrap"})
-		wireguard["domain_resolver"] = map[string]any{
-			"server": "bootstrap", "strategy": "prefer_ipv4", "disable_optimistic_cache": true,
-		}
-	}
-	dnsConfig := map[string]any{"servers": servers, "final": "vpn-dns"}
+	dnsConfig := map[string]any{"servers": []any{dns}, "final": "vpn-dns"}
 	if !hasIPv6 {
 		dnsConfig["strategy"] = "ipv4_only"
 	}
 	config := map[string]any{
 		"log":       map[string]any{"level": "info"},
 		"inbounds":  []any{map[string]any{"type": "socks", "tag": "ingress", "listen": "0.0.0.0", "listen_port": 1080}},
-		"endpoints": []any{wireguard},
+		"endpoints": []any{map[string]any{"type": "wireguard", "tag": "vpn", "address": addresses, "private_key": privateKey, "peers": []any{peer}}},
 		"dns":       dnsConfig,
 		"route":     map[string]any{"final": "vpn", "default_domain_resolver": "vpn-dns"},
 	}

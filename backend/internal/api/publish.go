@@ -75,7 +75,7 @@ func (h *PublishHandler) recordHistory(status, message, config string) {
 	h.generator.WriteHistory(version, status, message, config)
 }
 
-func (s *Server) dashboardStats(c *fiber.Ctx) error {
+func getDashboardStats(c *fiber.Ctx) error {
 	var ruleCount, subCount, exitCount, runningExitCount int64
 
 	db.DB.Model(&models.Rule{}).Where("enabled = true AND source = 'manual'").Count(&ruleCount)
@@ -92,6 +92,5 @@ func (s *Server) dashboardStats(c *fiber.Ctx) error {
 		"exit_count":         exitCount,
 		"running_exit_count": runningExitCount,
 		"last_publish":       lastPublish,
-		"tls":                s.ingress.TLSStats(),
 	})
 }

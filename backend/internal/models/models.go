@@ -22,24 +22,17 @@ type Exit struct {
 }
 
 type Rule struct {
-	ID        uint        `json:"id" gorm:"primaryKey;autoIncrement"`
-	Pattern   string      `json:"pattern" gorm:"not null"`
-	Type      string      `json:"type" gorm:"not null"` // exact / suffix
-	ExitID    *uint       `json:"exit_id"`
-	Exit      *Exit       `json:"exit,omitempty" gorm:"foreignKey:ExitID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
-	Priority  int         `json:"priority" gorm:"default:100"`
-	Source    string      `json:"source" gorm:"default:'manual'"` // manual / subscription
-	SubID     *uint       `json:"sub_id,omitempty"`
-	Enabled   bool        `json:"enabled" gorm:"default:true"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
-	FolderID  *uint       `json:"folder_id,omitempty" gorm:"index"`
-	Folder    *RuleFolder `json:"-" gorm:"foreignKey:FolderID;constraint:OnDelete:SET NULL;"`
-}
-
-type RuleFolder struct {
-	ID   uint   `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name string `json:"name" gorm:"not null;uniqueIndex"`
+	ID        uint      `json:"id" gorm:"primaryKey;autoIncrement"`
+	Pattern   string    `json:"pattern" gorm:"not null"`
+	Type      string    `json:"type" gorm:"not null"` // exact / suffix
+	ExitID    *uint     `json:"exit_id"`
+	Exit      *Exit     `json:"exit,omitempty" gorm:"foreignKey:ExitID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
+	Priority  int       `json:"priority" gorm:"default:100"`
+	Source    string    `json:"source" gorm:"default:'manual'"` // manual / subscription
+	SubID     *uint     `json:"sub_id,omitempty"`
+	Enabled   bool      `json:"enabled" gorm:"default:true"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Subscription struct {

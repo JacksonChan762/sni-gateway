@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { getStats, getExits, getApiError, type Stats } from '../api/client'
+import { getStats, getExits, getApiError } from '../api/client'
 import {
   Globe, ListFilter, Rss, Activity, CheckCircle, XCircle,
   AlertCircle, RotateCcw, ArrowRight,
@@ -21,52 +21,6 @@ function ExitStatusBadge({ status }: { status: string }) {
   return <span className="badge-gray">{status}</span>
 }
 
-function TLSCapacity({ active, limit, rejected }: NonNullable<Stats['tls']>) {
-  const remaining = Math.max(0, limit - active)
-  const inUse = active.toLocaleString()
-  const capacity = limit.toLocaleString()
-
-  return (
-    <section className="card space-y-4" aria-labelledby="tls-capacity-title">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="tls-capacity-title" className="text-sm font-semibold text-gray-300">TLS connection capacity</h2>
-        {remaining === 0 && <span className="badge-yellow">At capacity</span>}
-      </div>
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-        <div>
-          <dt className="text-xs text-gray-400">Connections in use</dt>
-          <dd className="text-xl font-semibold text-white tabular-nums">{inUse} <span className="text-sm text-gray-400">/ {capacity}</span></dd>
-        </div>
-        <div>
-          <dt className="text-xs text-gray-400">Slots available</dt>
-          <dd className="text-xl font-semibold text-white tabular-nums">{remaining.toLocaleString()}</dd>
-        </div>
-        <div className="col-span-2 sm:col-span-1">
-          <dt className="text-xs text-gray-400">Rejected at capacity since restart</dt>
-          <dd className="text-xl font-semibold text-white tabular-nums">{rejected.toLocaleString()}</dd>
-        </div>
-      </dl>
-      <div
-        role="meter" aria-labelledby="tls-capacity-title" aria-valuemin={0} aria-valuemax={limit}
-        aria-valuenow={Math.min(active, limit)} aria-valuetext={`${inUse} of ${capacity} connection slots used`}
-        className="h-2 overflow-hidden rounded-full bg-gray-800"
-      >
-        <div className={`h-full ${remaining === 0 ? 'bg-amber-400' : 'bg-indigo-400'}`}
-          style={{ width: `${Math.min(100, 100 * active / limit)}%` }} />
-      </div>
-      {remaining === 0 && <p className="text-xs text-amber-300">New connections are rejected while all slots are in use.</p>}
-      <details className="border-t border-gray-800 pt-3 text-xs text-gray-400">
-        <summary className="cursor-pointer py-1 font-medium text-indigo-300">How to change the limit</summary>
-        <ol className="ml-4 mt-2 list-decimal space-y-1.5">
-          <li>In the deployment directory, set <code className="text-gray-200">TLS_MAX_CONNECTIONS</code> in <code className="text-gray-200">.env</code> to the desired limit.</li>
-          <li>For Docker Compose, run <code className="select-all break-words text-gray-200">docker compose up -d backend</code> to apply the change.</li>
-        </ol>
-        <p className="mt-2">Recreating the backend disconnects active TLS connections. Check the new limit here once it starts.</p>
-      </details>
-    </section>
-  )
-}
-
 export default function Dashboard() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const { data: stats, isLoading: statsLoading, error: statsError, refetch: refreshStats, isFetching: statsFetching, dataUpdatedAt } = useQuery({
@@ -79,8 +33,6 @@ export default function Dashboard() {
     queryFn: getExits,
     refetchInterval: autoRefresh ? 15_000 : false,
   })
-  const tls = stats?.tls
-  const unhealthyExits = exits?.filter(exit => exit.status === 'unhealthy').length ?? 0
 
   const statCards = [
     {
@@ -117,7 +69,7 @@ export default function Dashboard() {
       color: 'text-green-400',
       bg: 'bg-green-950/50',
       border: 'border-green-800/30',
-      to: '/exits?status=running',
+      to: '/exits',
     },
   ]
 
@@ -147,13 +99,6 @@ export default function Dashboard() {
         </div>
       )}
       <PublishStatusNotice />
-      {unhealthyExits > 0 && (
-        <Link to="/exits?status=unhealthy" className="card flex items-center gap-2.5 border-amber-800/60 bg-amber-950/40 py-3 text-sm font-medium text-amber-200 hover:bg-amber-950/70">
-          <AlertCircle size={16} aria-hidden="true" className="shrink-0" />
-          <span className="flex-1">Review {unhealthyExits} unhealthy {unhealthyExits === 1 ? 'exit' : 'exits'}</span>
-          <ArrowRight size={14} aria-hidden="true" className="shrink-0" />
-        </Link>
-      )}
       {stats && !statsError && !exitsError && (!stats.exit_count || !stats.rule_count || !stats.last_publish?.id) && (
         <section className="card space-y-4" aria-labelledby="setup-title">
           <h2 id="setup-title" className="font-semibold text-white">Get your gateway ready</h2>
@@ -174,8 +119,6 @@ export default function Dashboard() {
         </section>
       )}
 
-      {tls && tls.limit > 0 && <TLSCapacity {...tls} />}
-
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {statCards.map(({ label, value, icon: Icon, color, bg, border, to }) => (
@@ -184,9 +127,9 @@ export default function Dashboard() {
             to={to}
             className={`card border ${border} ${bg} hover:border-opacity-60 transition-all group`}
           >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <span className="min-w-0 text-xs font-medium text-gray-400 [overflow-wrap:anywhere]">{label}</span>
-              <div className={`hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg min-[380px]:flex ${bg}`}>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-medium text-gray-500">{label}</span>
+              <div className={`w-8 h-8 rounded-lg ${bg} flex items-center justify-center`}>
                 <Icon size={15} className={color} />
               </div>
             </div>
@@ -224,23 +167,26 @@ export default function Dashboard() {
             {exits.map((exit, i) => (
               <div
                 key={exit.id}
-                className={`flex items-start justify-between gap-3 px-5 py-3 ${
+                className={`flex items-center justify-between px-5 py-3 ${
                   i < exits.length - 1 ? 'border-b border-gray-800/50' : ''
                 } hover:bg-gray-800/30 transition-colors`}
               >
-                <div className="flex min-w-0 items-start gap-3">
-                  <div className="mt-1.5 shrink-0">
-                    <StatusDot status={exit.status} />
-                  </div>
-                  <div className="min-w-0 [overflow-wrap:anywhere]">
+                <div className="flex items-center gap-3">
+                  <StatusDot status={exit.status} />
+                  <div>
                     <div className="font-medium text-sm text-white">{exit.name}</div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {[exit.provider, exit.protocol, exit.country, exit.city].filter(Boolean).join(' · ')}
+                      {exit.provider} · {exit.protocol} · {exit.country}
+                      {exit.city ? ` (${exit.city})` : ''}
                     </div>
-                    {exit.public_ip && <div className="mt-1 font-mono text-xs text-gray-400">Public IP {exit.public_ip}</div>}
                   </div>
                 </div>
-                <div className="shrink-0">
+                <div className="flex items-center gap-3">
+                  {exit.public_ip && (
+                    <span className="text-xs text-gray-500 font-mono hidden sm:block">
+                      {exit.public_ip}
+                    </span>
+                  )}
                   <ExitStatusBadge status={exit.status} />
                 </div>
               </div>

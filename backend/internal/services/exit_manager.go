@@ -37,35 +37,15 @@ func (em *ExitManager) lockExit(id uint) func() {
 }
 
 func (em *ExitManager) lockExitOnly(id uint) func() {
-	lock := em.exitLock(id)
-	lock.Lock()
-	return lock.Unlock
-}
-
-func (em *ExitManager) exitLock(id uint) *sync.Mutex {
 	em.exitMu.Lock()
-	defer em.exitMu.Unlock()
 	lock := em.exitLocks[id]
 	if lock == nil {
 		lock = &sync.Mutex{}
 		em.exitLocks[id] = lock
 	}
-	return lock
-}
-
-func (em *ExitManager) tryLockExit(id uint) (func(), bool) {
-	if !em.operationMu.TryRLock() {
-		return nil, false
-	}
-	lock := em.exitLock(id)
-	if !lock.TryLock() {
-		em.operationMu.RUnlock()
-		return nil, false
-	}
-	return func() {
-		lock.Unlock()
-		em.operationMu.RUnlock()
-	}, true
+	em.exitMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 func (em *ExitManager) ensureDockerAvailable() error {
@@ -524,17 +504,13 @@ func (em *ExitManager) updateStatus(exit *models.Exit, status string) {
 }
 
 func (em *ExitManager) logEvent(exitID uint, action, status, msg string) {
-	em.logEventContext(context.Background(), exitID, action, status, msg)
-}
-
-func (em *ExitManager) logEventContext(ctx context.Context, exitID uint, action, status, msg string) {
 	event := models.ExitRuntimeEvent{
 		ExitID:  exitID,
 		Action:  action,
 		Status:  status,
 		Message: msg,
 	}
-	db.DB.WithContext(ctx).Create(&event)
+	db.DB.Create(&event)
 }
 
 func (em *ExitManager) refreshPublicIP(exitID uint, exitName string) {

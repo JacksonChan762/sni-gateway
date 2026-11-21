@@ -26,18 +26,6 @@ func (h *RuleHandler) List(c *fiber.Ctx) error {
 	if exitID := c.Query("exit_id"); exitID != "" {
 		q = q.Where("exit_id = ?", exitID)
 	}
-	if folderFilter := c.Query("folder_id"); folderFilter != "" {
-		q = q.Where("source = ?", "manual")
-		if folderFilter == "unfiled" {
-			q = q.Where("folder_id IS NULL")
-		} else {
-			folderID, ok := parseRuleFolderID(folderFilter)
-			if !ok {
-				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "folder_id must be a positive integer or unfiled"})
-			}
-			q = q.Where("folder_id = ?", folderID)
-		}
-	}
 	// Keep the original array response for existing API clients. The UI opts
 	// into a bounded result with page, limit, and q.
 	if c.Query("page") != "" || c.Query("limit") != "" || c.Query("q") != "" {
@@ -83,7 +71,6 @@ type CreateRuleRequest struct {
 	ExitID   *uint  `json:"exit_id"`
 	Priority int    `json:"priority"`
 	Enabled  *bool  `json:"enabled"`
-	FolderID *uint  `json:"folder_id"`
 }
 
 type CreateRulesBulkRequest struct {
@@ -102,11 +89,8 @@ func (h *RuleHandler) Create(c *fiber.Ctx) error {
 	if err := ensureExitExists(db.DB, rule.ExitID); err != nil {
 		return exitReferenceResponse(c, err)
 	}
-	if err := ensureRuleFoldersExist([]models.Rule{rule}); err != nil {
-		return ruleFolderReferenceResponse(c, err)
-	}
 	if err := db.DB.Create(&rule).Error; err != nil {
-		return ruleFolderReferenceResponse(c, err)
+		return err
 	}
 	h.publisher.InvalidatePending()
 	db.DB.Preload("Exit", publicExit).First(&rule, rule.ID)
@@ -145,12 +129,9 @@ func (h *RuleHandler) CreateBulk(c *fiber.Ctx) error {
 	if err := ensureRuleExitsExist(db.DB, rules); err != nil {
 		return exitReferenceResponse(c, err)
 	}
-	if err := ensureRuleFoldersExist(rules); err != nil {
-		return ruleFolderReferenceResponse(c, err)
-	}
 
 	if err := db.DB.Create(&rules).Error; err != nil {
-		return ruleFolderReferenceResponse(c, err)
+		return err
 	}
 	h.publisher.InvalidatePending()
 	ids := make([]uint, 0, len(rules))
@@ -173,7 +154,6 @@ func (h *RuleHandler) Update(c *fiber.Ctx) error {
 	if err := db.DB.First(&rule, id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "not found"})
 	}
-	previous := rule
 
 	var req CreateRuleRequest
 	fields, err := decodeJSONBody(c.Body(), &req)
@@ -226,79 +206,13 @@ func (h *RuleHandler) Update(c *fiber.Ctx) error {
 	if req.Enabled != nil {
 		rule.Enabled = *req.Enabled
 	}
-	present, folderID, err := parseOptionalUintField(fields, "folder_id")
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
-	}
-	if present && !sameRuleReference(previous.FolderID, folderID) {
-		if folderID != nil && rule.Source != "manual" {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "only manual rules can be added to a folder"})
-		}
-		if !validOptionalRuleFolderID(folderID) {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "folder_id must be a positive folder ID or null"})
-		}
-		rule.FolderID = folderID
-		if err := ensureRuleFoldersExist([]models.Rule{rule}); err != nil {
-			return ruleFolderReferenceResponse(c, err)
-		}
-	}
 
-	updates := changedRoutingFields(previous, rule)
-	routingChanged := len(updates) > 0
-	if !sameRuleReference(previous.FolderID, rule.FolderID) {
-		updates["folder_id"] = rule.FolderID
-	}
-	if len(updates) > 0 {
-		query := db.DB.Model(&models.Rule{ID: rule.ID})
-		var result *gorm.DB
-		if routingChanged {
-			result = query.Updates(updates)
-		} else {
-			// Keep the routing snapshot's update timestamp unchanged for an organizational move.
-			result = query.UpdateColumns(updates)
-		}
-		if result.Error != nil {
-			return ruleFolderReferenceResponse(c, result.Error)
-		}
-		if result.RowsAffected == 0 {
-			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "not found"})
-		}
-		if routingChanged {
-			h.publisher.InvalidatePending()
-		}
-	}
-	var updated models.Rule
-	if err := db.DB.Preload("Exit", publicExit).First(&updated, rule.ID).Error; err != nil {
+	if err := db.DB.Save(&rule).Error; err != nil {
 		return err
 	}
-	return c.JSON(updated)
-}
-
-func changedRoutingFields(before, after models.Rule) map[string]any {
-	changes := make(map[string]any)
-	if before.Pattern != after.Pattern {
-		changes["pattern"] = after.Pattern
-	}
-	if before.Type != after.Type {
-		changes["type"] = after.Type
-	}
-	if !sameRuleReference(before.ExitID, after.ExitID) {
-		changes["exit_id"] = after.ExitID
-	}
-	if before.Priority != after.Priority {
-		changes["priority"] = after.Priority
-	}
-	if before.Enabled != after.Enabled {
-		changes["enabled"] = after.Enabled
-	}
-	return changes
-}
-
-func sameRuleReference(a, b *uint) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
+	h.publisher.InvalidatePending()
+	db.DB.Preload("Exit", publicExit).First(&rule, rule.ID)
+	return c.JSON(rule)
 }
 
 func (h *RuleHandler) Delete(c *fiber.Ctx) error {
@@ -315,9 +229,6 @@ func (h *RuleHandler) Delete(c *fiber.Ctx) error {
 }
 
 func buildManualRule(req CreateRuleRequest) (models.Rule, error) {
-	if !validOptionalRuleFolderID(req.FolderID) {
-		return models.Rule{}, fiber.NewError(fiber.StatusBadRequest, "folder_id must be a positive folder ID or null")
-	}
 	pattern := normalizeRulePattern(req.Pattern)
 	if !services.ValidDomain(pattern) {
 		return models.Rule{}, fiber.NewError(fiber.StatusBadRequest, "pattern must be a valid ASCII or punycode domain")
@@ -345,7 +256,6 @@ func buildManualRule(req CreateRuleRequest) (models.Rule, error) {
 		Priority: priority,
 		Source:   "manual",
 		Enabled:  enabled,
-		FolderID: req.FolderID,
 	}, nil
 }
 

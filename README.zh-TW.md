@@ -61,7 +61,7 @@ ssh -L 8080:127.0.0.1:8080 user@gateway-host
 
 1. **建立出口。** 選擇內建供應商、國家或城市，以及 WireGuard 或 OpenVPN，再填入畫面要求的認證資料。使用自己的 VPN 伺服器時，選擇 **Custom configuration**，匯入 WireGuard `.conf`，或包含必要憑證與金鑰的可攜式 OpenVPN `.ovpn` 設定。
 2. **確認出口。** 啟動時會透過 VPN 探測公網 IP。**Running** 表示探測成功；**Unhealthy** 表示失敗。**Logs** 可查看執行日誌，**Check status** 會重新探測目前連線。
-3. **新增規則。** 將精確網域或網域尾碼對應至出口。在 **Rules** 按 **New folder** 建立資料夾，就能在新增或編輯手動規則時選擇歸檔位置，也可在指定資料夾內搜尋。刪除資料夾會把其中的規則移至 **Unfiled**。
+3. **新增規則。** 將精確網域或網域尾碼對應至出口。規則頁支援搜尋與分頁。
 4. **發布。** 在**發布**頁驗證並發布已儲存的規則。新連線會立即使用已發布的路由表；回復功能可還原上一版。訂閱同步也能發布更新。
 5. **將用戶端流量送往閘道。** 設定用戶端 DNS 或 hosts，讓指定網域指向閘道，再以 HTTPS 存取。
 
@@ -70,20 +70,6 @@ ssh -L 8080:127.0.0.1:8080 user@gateway-host
 供應商自動選擇模式會依已選城市篩選端點；未選城市時則使用國家。每次連線最多實測四個候選端點，測量從建立容器到成功取得公網 IP 的耗時，選擇最快成功的端點；正式連線失敗時，會嘗試其他已測試成功的候選。每次試連的公網 IP 探測最多 40 秒，整次連線流程上限為五分鐘；比較範圍僅限抽測的候選端點。**Restart** 會重新選擇；**Check status** 只探測目前端點。畫面中的公網 IP 是實測出口位址，可能與目錄中的 VPN 端點 IP 不同。
 
 WireGuard 環境變數 YAML 與 OpenVPN YAML 是本程式的匯入／匯出格式，並非可獨立使用的 Compose 檔案。請參閱 [API 文件](docs/API.md)中的請求範例。
-
-### 使用 DDNS 網域連接 WireGuard 出口
-
-SNI Gateway 以 WireGuard 用戶端身分連接你的 VPN 伺服器。選擇 **Custom configuration**，匯入用戶端設定檔（例如 `wg0.conf`），並在 `[Peer]` 區段填入以下設定。
-
-```ini
-Endpoint = vpn.example.com:51820
-```
-
-請將 DDNS 網域指向出口容器可連線的 VPN 伺服器位址，並填入伺服器的 WireGuard UDP 連接埠。也可直接在 **Endpoint address** 貼上 `vpn.example.com:51820`。若網域只有 AAAA 記錄，出口容器需要能連通 IPv6。sing-box 使用出口容器的 DNS 解析對端網域，發起交握時可重新查詢。經由出口轉送的流量仍透過 VPN 查詢 DNS。
-
-閘道會檢查使用主機名的自訂 WireGuard 出口。確認 DNS 位址變更且連續兩次 VPN 探測失敗後，會嘗試重啟受影響的容器一次。後端啟動後的第一次解析結果會建立比對基準。也可按 **Restart** 立即重試。
-
-匯入時會保留 `[Interface]` 的 `MTU` 與 `[Peer]` 的 `PersistentKeepalive`，可在 **Advanced settings** 編輯。配合網路路徑的 MTU 可減少封包分段或傳輸停滯，Keepalive 可在閒置時維持 NAT 對應。
 
 ## 設定
 
@@ -95,9 +81,7 @@ Endpoint = vpn.example.com:51820
 | `ADMIN_PASSWORD` | 首次安裝隨機產生 |
 | `JWT_SECRET` | 首次安裝隨機產生 |
 | `TLS_IDLE_TIMEOUT` | `5m`；雙向都沒有流量達此時間後關閉 TLS 連線 |
-| `TLS_MAX_CONNECTIONS` | `2048`，所有出口共用的同時 TCP/TLS 連線上限 |
 | `EXIT_RESTART_CRON` | `@every 12h`；設為 `disabled` 可停用定期重啟出口 |
-| `WIREGUARD_DDNS_CHECK_INTERVAL` | `30s`，設為 `0` 可停用 DNS 換址後的自動重連 |
 | `PROVIDER_CATALOG_UPDATE_INTERVAL` | `24h` |
 
 已發布的路由快照與供應商目錄快取儲存在 `published_routes` volume，PostgreSQL 使用 `postgres_data`。後端透過 Docker socket 建立、檢查及停止出口容器。
@@ -150,8 +134,6 @@ docker compose build
 ## 支援範圍
 
 支援帶有 SNI 的 TCP HTTPS，不轉送 QUIC／HTTP3 或沒有 SNI 的 TLS 連線。一般 HTTP 僅對符合規則的網域重新導向 HTTPS。閒置 TLS 連線依 `TLS_IDLE_TIMEOUT` 關閉，閘道停止時也會關閉現有 TLS 連線。
-
-儀表板會顯示 TLS 連線使用量，以及後端啟動後因額滿而拒絕的連線數。等待 ClientHello 或 SOCKS 連線也會佔用名額。若要測試提高上限，可在 `.env` 設定 `TLS_MAX_CONNECTIONS=4096`，再執行 `docker compose up -d --build backend` 重建後端。後端每條已建立的連線會使用兩個 socket 描述符，程序需要額外預留。以 4,096 條連線估計，雙向轉送緩衝區約佔 256 MiB，另有 socket、執行環境及 VPN 的用量。正式調高前，請分別測試持續流量及突發連線。
 
 ## 授權
 

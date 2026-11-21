@@ -24,15 +24,13 @@ Authenticated `GET /api/providers` lists providers in the cached [Gluetun server
   "runtime": "sing-box",
   "protocol": "wireguard",
   "provider": "custom",
-  "wireguard_endpoint_ip": "vpn.example.com",
+  "wireguard_endpoint_ip": "203.0.113.10",
   "wireguard_endpoint_port": "51820",
   "wireguard_public_key": "BASE64_PEER_PUBLIC_KEY",
   "wireguard_private_key": "BASE64_CLIENT_PRIVATE_KEY",
   "wireguard_addresses": "10.2.0.2/32",
   "wireguard_allowed_ips": "0.0.0.0/0",
   "wireguard_dns": "9.9.9.9",
-  "wireguard_mtu": "1408",
-  "wireguard_persistent_keepalive_interval": "25",
   "enabled": true
 }
 ```
@@ -52,13 +50,7 @@ For built-in OpenVPN providers, submit `provider`, `country`, optional `city`, `
 }
 ```
 
-For a custom sing-box WireGuard exit, SNI Gateway acts as the VPN client. Provide a private key, peer public key, tunnel address, and the peer's address and UDP port. The existing `wireguard_endpoint_ip` field accepts an IPv4 address, an unbracketed IPv6 address, or a DNS hostname such as a DDNS domain. Put the port in `wireguard_endpoint_port`. The peer must allow `0.0.0.0/0`. `wireguard_preshared_key` is optional.
-
-For a hostname, sing-box uses the exit container's resolver for the peer address and can resolve it again during handshake attempts. `wireguard_dns` controls DNS for traffic routed through the VPN. To retry after a DDNS change, restart the exit with the same stored hostname.
-
-Optional `wireguard_mtu` and `wireguard_persistent_keepalive_interval` values are strings. The MTU is specified in bytes. Keepalive takes an interval in seconds, `"0"`, or `"off"` to disable it. New exits use the sing-box defaults of MTU 1408 and keepalive disabled when these fields are omitted. Send an empty string for either field to reset it to its default when updating an exit.
-
-Custom OpenVPN accepts a complete portable `.ovpn` profile in `openvpn_profile`. Include the CA and any required client certificate and key inline. External file references and unsupported directives return validation errors.
+Custom WireGuard uses a private key, peer public key, endpoint IP/port, and tunnel address. The peer must allow `0.0.0.0/0`. `wireguard_preshared_key` is optional. Custom OpenVPN accepts a complete portable `.ovpn` profile in `openvpn_profile`; inline CA and any client certificate/key are required. External file references and unsupported directives return validation errors. Custom examples:
 
 ```json
 {
@@ -73,7 +65,7 @@ Custom OpenVPN accepts a complete portable `.ovpn` profile in `openvpn_profile`.
 }
 ```
 
-The `config_yaml` import/export format is also accepted. WireGuard uses a `services.singbox.environment` list of `WIREGUARD_*` variables. Set the peer address or hostname in `WIREGUARD_ENDPOINT_IP` and the optional tuning settings in `WIREGUARD_MTU` and `WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL`. OpenVPN export uses top-level profile or provider credentials, `runtime`, and location fields. Use this application format for importing and exporting exit settings. The config endpoint returns secrets and should be handled accordingly.
+The `config_yaml` import/export format is also accepted. WireGuard uses a `services.singbox.environment` list of `WIREGUARD_*` variables. OpenVPN export uses top-level profile or provider credentials, `runtime`, and location fields. This is an application format, not a standalone Compose deployment. The config endpoint returns secrets and should be handled accordingly.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -90,9 +82,9 @@ The `config_yaml` import/export format is also accepted. WireGuard uses a `servi
 | `GET /api/exits/:id/logs` | Return sing-box logs; legacy Gluetun exits retain their old logs until converted |
 | `GET /api/exits/:id/config` | Return configuration including secrets; handle carefully |
 
-Starting an exit probes its public IP through the sing-box SOCKS listener. A successful probe records `status: "running"` and `public_ip`. A failed probe preserves the exit as `status: "unhealthy"` so its logs can be inspected and the connection retried. `POST /api/exits/:id/start` and `/restart` return the resulting status and public IP. For automatic server selection, provide a country, a city, or both. When a city is set, server selection ignores the country; the country only filters cities in the picker. Every connection tests up to four distinct catalog endpoints through the VPN and records the one with the shortest successful connect-and-public-IP probe as `endpoint_ip`. The previously chosen endpoint remains eligible and can win again. The catalog holds VPN endpoint IPs from Gluetun servers data and checks upstream daily; `public_ip` is measured through the connected VPN.
+Starting an exit probes its public IP through the sing-box SOCKS listener. A successful probe records `status: "running"`, `public_ip`, and the chosen `endpoint_ip`; a failed probe preserves the exit as `status: "unhealthy"` so its logs can be inspected and the connection retried. `POST /api/exits/:id/start` and `/restart` return the resulting status and public IP. For automatic server selection, provide a country, a city, or both. When a city is set, server selection ignores the country; the country only filters cities in the picker. Every connection tests up to four distinct catalog endpoints through the VPN and chooses the one with the shortest successful connect-and-public-IP probe. The previously chosen endpoint remains eligible and can win again. The catalog holds VPN endpoint IPs from Gluetun servers data and checks upstream daily; `public_ip` is measured through the connected VPN.
 
-The trial time covers container startup through the successful public-IP probe. Each candidate has a 40-second probe deadline, with a five-minute overall connection deadline. If more than four endpoints match, four are sampled and the fastest successful sample is chosen. If the first choice fails on final connection, another successful sample is tried. `GET /api/exits/:id/status` and `POST /api/exits/:id/test` probe the current connection. Automatic provider exits keep the chosen catalog endpoint until `/restart` reruns endpoint selection.
+The trial time covers container startup through the successful public-IP probe. Each candidate has a 40-second probe deadline, with a five-minute overall connection deadline. If more than four endpoints match, four are sampled; the chosen endpoint is the fastest measured sample, not necessarily the fastest in the catalog. If the first choice fails on final connection, another successful sample is tried. `GET /api/exits/:id/status` and `POST /api/exits/:id/test` only probe the current endpoint; `/restart` reruns endpoint selection. Existing running exits keep their endpoint until restarted.
 
 Older Gluetun and relay-based exits remain in the database during migration. Edit one with valid provider credentials or a complete custom configuration to convert it to sing-box. The API rejects new Gluetun exits and attempts to start an unconverted relay exit.
 
@@ -105,10 +97,6 @@ Add a rule with `POST /api/rules`:
 ```
 
 `type` is `exact` or `suffix`. Higher priority wins, with lower rule ID breaking ties. Other endpoints are `GET /api/rules`, `PUT /api/rules/:id`, `DELETE /api/rules/:id`, `POST /api/rules/bulk`, and `POST /api/rules/test`. Rules can be saved without becoming active until publication. `GET /api/rules` keeps its array response when called without pagination parameters. Supply `page` (starting at 1), `limit` (1–200), and optional `q` to get `{ "rules": [...], "total": number, "page": number, "limit": number }`. The search matches rule patterns and exit names.
-
-Use `GET /api/rule-folders` to list folders for manual rules. Create one with `POST /api/rule-folders` and a `name` string. Use `PUT /api/rule-folders/:id` to rename it and `DELETE /api/rule-folders/:id` to move its rules to Unfiled and remove the folder.
-
-Set `folder_id` on a manual rule when creating, editing, or importing it in bulk. Set it to `null` to move a rule to Unfiled. On an update, omitting `folder_id` keeps the current folder. Add `folder_id=<id>` or `folder_id=unfiled` to `GET /api/rules` to filter the results before pagination. Folder assignments are for organizing the Rules page and take effect immediately.
 
 Subscriptions use `GET/POST /api/subscriptions`, `PUT/DELETE /api/subscriptions/:id`, and `POST /api/subscriptions/:id/sync`. A subscription includes `name`, `url`, `exit_id`, `enabled`, and `interval_minutes`. A successful sync updates generated rules and publishes a new routing snapshot.
 
@@ -123,8 +111,4 @@ Subscriptions use `GET/POST /api/subscriptions`, `PUT/DELETE /api/subscriptions/
 | `POST /api/publish/rollback` | Activate the previous snapshot |
 | `GET /api/publish/history` | List recent publication events |
 
-The published snapshot is separate from editable database rules and survives backend restarts. Existing TCP connections keep their selected exit; new connections use the latest published snapshot.
-
-## Dashboard statistics
-
-`GET /api/stats` returns dashboard counters and a `tls` object. `tls.active` counts admitted TCP/TLS connections, including ones still being established. `tls.limit` is the configured simultaneous connection limit. `tls.rejected` counts new connections closed because the limit was reached since the backend process started.
+The published snapshot is separate from editable database rules and survives backend restarts. Existing TCP connections keep their selected exit; new connections use the latest published snapshot. `GET /api/stats` returns dashboard counters.

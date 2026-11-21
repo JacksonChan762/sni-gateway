@@ -14,11 +14,9 @@ type Config struct {
 	RouteSnapshotPath             string
 	DockerSocket                  string
 	ExitRestartCron               string
-	WireguardDDNSCheckInterval    string
 	ProviderCatalogPath           string
 	ProviderCatalogUpdateInterval string
 	TLSIdleTimeout                string
-	TLSMaxConnections             string
 }
 
 func Load() *Config {
@@ -31,11 +29,9 @@ func Load() *Config {
 		RouteSnapshotPath:             getEnv("ROUTE_SNAPSHOT_PATH", "/var/lib/sni-gateway/routes.json"),
 		DockerSocket:                  getEnv("DOCKER_SOCKET", "/var/run/docker.sock"),
 		ExitRestartCron:               getEnv("EXIT_RESTART_CRON", getEnv("NIGHTLY_RESTART_EXITS_CRON", "@every 12h")),
-		WireguardDDNSCheckInterval:    getEnv("WIREGUARD_DDNS_CHECK_INTERVAL", "30s"),
 		ProviderCatalogPath:           getEnv("PROVIDER_CATALOG_PATH", "/var/lib/sni-gateway/providers.json.gz"),
 		ProviderCatalogUpdateInterval: getEnv("PROVIDER_CATALOG_UPDATE_INTERVAL", "24h"),
 		TLSIdleTimeout:                getEnv("TLS_IDLE_TIMEOUT", "5m"),
-		TLSMaxConnections:             os.Getenv("TLS_MAX_CONNECTIONS"),
 	}
 }
 

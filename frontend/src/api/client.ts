@@ -81,17 +81,11 @@ export interface Rule {
   type: 'exact' | 'suffix'
   exit_id: number | null
   exit?: Exit
-  folder_id?: number | null
   priority: number
   source: 'manual' | 'subscription'
   enabled: boolean
   created_at: string
   updated_at: string
-}
-
-export interface RuleFolder {
-  id: number
-  name: string
 }
 
 export interface Subscription {
@@ -124,11 +118,6 @@ export interface Stats {
   exit_count: number
   running_exit_count: number
   last_publish: PublishHistory
-  tls?: {
-    active: number
-    limit: number
-    rejected: number
-  }
 }
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
@@ -167,9 +156,8 @@ export const getExitStatus = (id: number) =>
 // ─── Rules ───────────────────────────────────────────────────────────────────
 
 export const getRules = () => api.get<Rule[]>('/rules?source=manual').then(r => r.data)
-export const getRulesPage = (page: number, search: string, folder?: number | 'unfiled') => {
+export const getRulesPage = (page: number, search: string) => {
   const params = new URLSearchParams({ source: 'manual', page: String(page), limit: '50', q: search })
-  if (folder !== undefined) params.set('folder_id', String(folder))
   return api.get<{ rules: Rule[]; total: number; page: number; limit: number }>(`/rules?${params}`).then(r => r.data)
 }
 export const createRule = (data: Partial<Rule>) => api.post<Rule>('/rules', data).then(r => r.data)
@@ -178,11 +166,6 @@ export const createRulesBulk = (rules: Partial<Rule>[]) =>
 export const updateRule = (id: number, data: Partial<Rule>) =>
   api.put<Rule>(`/rules/${id}`, data).then(r => r.data)
 export const deleteRule = (id: number) => api.delete(`/rules/${id}`).then(r => r.data)
-export const getRuleFolders = () => api.get<RuleFolder[]>('/rule-folders').then(r => r.data)
-export const createRuleFolder = (name: string) => api.post<RuleFolder>('/rule-folders', { name }).then(r => r.data)
-export const renameRuleFolder = (id: number, name: string) =>
-  api.put<RuleFolder>(`/rule-folders/${id}`, { name }).then(r => r.data)
-export const deleteRuleFolder = (id: number) => api.delete(`/rule-folders/${id}`).then(r => r.data)
 
 // ─── Subscriptions ───────────────────────────────────────────────────────────
 

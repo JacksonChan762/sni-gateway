@@ -23,7 +23,6 @@ func Init(dsn string) error {
 	log.Println("Database connected. Running migrations...")
 	err = DB.AutoMigrate(
 		&models.Exit{},
-		&models.RuleFolder{},
 		&models.Rule{},
 		&models.Subscription{},
 		&models.PublishHistory{},
