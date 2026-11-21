@@ -1,13 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getRulesPage, createRule, createRulesBulk, updateRule, deleteRule, getExits, getApiError } from '../api/client'
-import { type Rule } from '../api/client'
-import { Plus, Trash2, Pencil, X, ListFilter, Search } from 'lucide-react'
+import {
+  getRulesPage, createRule, createRulesBulk, updateRule, deleteRule, getExits, getApiError,
+  getRuleFolders, createRuleFolder, renameRuleFolder, deleteRuleFolder,
+  type Exit, type Rule, type RuleFolder,
+} from '../api/client'
+import { Plus, Trash2, Pencil, X, ListFilter, Search, FolderPlus } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/ConfirmModal'
 import PublishStatusNotice from '../components/PublishStatusNotice'
 
 type RuleFormType = Rule['type'] | 'auto'
+type FolderFilter = number | 'all' | 'unfiled'
+type RuleFormValues = Pick<Rule, 'pattern' | 'type' | 'exit_id' | 'folder_id' | 'priority' | 'enabled'>
+type RuleSubmission = Partial<RuleFormValues> | { rules: RuleFormValues[] }
 
 export default function Rules() {
   const qc = useQueryClient()
@@ -16,13 +22,25 @@ export default function Rules() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [querySearch, setQuerySearch] = useState('')
+  const [folder, setFolder] = useState<FolderFilter>('all')
+  const [folderEditor, setFolderEditor] = useState<RuleFolder | 'new' | null>(null)
+  const foldersQuery = useQuery({ queryKey: ['rule-folders'], queryFn: getRuleFolders })
+  const folders = foldersQuery.data ?? []
+  const selectedFolder = folders.find(item => item.id === folder)
+  const folderNames = new Map(folders.map(item => [item.id, item.name]))
   useEffect(() => {
     const timer = window.setTimeout(() => setQuerySearch(search), 250)
     return () => window.clearTimeout(timer)
   }, [search])
+  useEffect(() => {
+    if (typeof folder === 'number' && foldersQuery.data && !selectedFolder) {
+      setFolder('all')
+      setPage(1)
+    }
+  }, [folder, foldersQuery.data, selectedFolder])
   const { data, isLoading, isFetching, isPlaceholderData, error, refetch } = useQuery({
-    queryKey: ['rules', page, querySearch],
-    queryFn: () => getRulesPage(page, querySearch),
+    queryKey: ['rules', page, querySearch, folder],
+    queryFn: () => getRulesPage(page, querySearch, folder === 'all' ? undefined : folder),
     placeholderData: keepPreviousData,
   })
   const rules = isPlaceholderData ? [] : data?.rules ?? []
@@ -35,9 +53,9 @@ export default function Rules() {
   const [showForm, setShowForm] = useState(false)
   const [editRule, setEditRule] = useState<Rule | null>(null)
 
-  const invalidate = () => {
+  const invalidate = (routingChanged = true) => {
     void qc.invalidateQueries({ queryKey: ['rules'] })
-    void qc.invalidateQueries({ queryKey: ['publish-status'] })
+    if (routingChanged) void qc.invalidateQueries({ queryKey: ['publish-status'] })
   }
 
   const createMut = useMutation({
@@ -56,7 +74,12 @@ export default function Rules() {
   })
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Rule> }) => updateRule(id, data),
-    onSuccess: () => { invalidate(); setEditRule(null); toast.success('Rule saved. Publish to update live routing.') },
+    onSuccess: (_, { data }) => {
+      const folderOnly = Object.keys(data).length === 1 && 'folder_id' in data
+      invalidate(!folderOnly)
+      setEditRule(null)
+      toast.success(folderOnly ? 'Rule moved' : 'Rule saved. Publish to update live routing.')
+    },
     onError: err => toast.error(getApiError(err)),
   })
   const deleteMut = useMutation({
@@ -64,6 +87,56 @@ export default function Rules() {
     onSuccess: () => { invalidate(); toast.success('Rule deleted. Publish to update live routing.') },
     onError: err => toast.error(getApiError(err)),
   })
+
+  const selectFolder = (value: FolderFilter) => {
+    setFolder(value)
+    setPage(1)
+  }
+
+  const saveFolder = useMutation({
+    mutationFn: ({ name, id }: { name: string; id?: number }) =>
+      id === undefined ? createRuleFolder(name) : renameRuleFolder(id, name),
+    onSuccess: (saved, { id }) => {
+      qc.setQueryData<RuleFolder[]>(['rule-folders'], current =>
+        [...(current ?? []).filter(item => item.id !== saved.id), saved]
+          .sort((a, b) => a.name.localeCompare(b.name)))
+      void qc.invalidateQueries({ queryKey: ['rule-folders'] })
+      setFolderEditor(null)
+      if (id === undefined) {
+        setSearch('')
+        setQuerySearch('')
+        selectFolder(saved.id)
+      }
+      toast.success(id === undefined ? 'Folder created' : 'Folder renamed')
+    },
+  })
+
+  const deleteFolder = useMutation({
+    mutationFn: deleteRuleFolder,
+    onSuccess: (_, id) => {
+      if (folder === id) selectFolder('unfiled')
+      qc.setQueryData<RuleFolder[]>(['rule-folders'], current => current?.filter(item => item.id !== id))
+      void qc.invalidateQueries({ queryKey: ['rule-folders'] })
+      invalidate(false)
+      toast.success('Folder deleted. Its rules are now unfiled.')
+    },
+    onError: err => toast.error(getApiError(err)),
+  })
+
+  const openFolderEditor = (value: RuleFolder | 'new') => {
+    saveFolder.reset()
+    setFolderEditor(value)
+  }
+
+  const handleDeleteFolder = async (item: RuleFolder) => {
+    const ok = await confirm({
+      title: 'Delete folder',
+      message: `Delete "${item.name}"? Its rules will move to Unfiled and keep their routing settings.`,
+      confirmText: 'Delete folder',
+      dangerous: true,
+    })
+    if (ok) deleteFolder.mutate(item.id)
+  }
 
   const handleDelete = async (rule: Rule) => {
     const ok = await confirm({
@@ -86,9 +159,14 @@ export default function Rules() {
             {total} {querySearch ? 'matching' : 'manual'} {total === 1 ? 'rule' : 'rules'}
           </p>
         </div>
-        <button className="btn-primary" onClick={() => setShowForm(true)}>
-          <Plus size={15} /> New Rule
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-secondary" onClick={() => openFolderEditor('new')}>
+            <FolderPlus size={15} aria-hidden="true" /> New folder
+          </button>
+          <button className="btn-primary" onClick={() => setShowForm(true)}>
+            <Plus size={15} aria-hidden="true" /> New Rule
+          </button>
+        </div>
       </div>
 
       <PublishStatusNotice />
@@ -97,22 +175,47 @@ export default function Rules() {
         <button className="btn-secondary ml-3" onClick={() => void refetch()}>Retry</button>
         {rules.length > 0 && <p className="mt-2">Showing the last received list.</p>}
       </div>}
+      {foldersQuery.isError && <div role="alert" className="card border-red-800 text-red-300 text-sm">
+        Could not load folders. {getApiError(foldersQuery.error)}
+        <button className="btn-secondary ml-3" onClick={() => void foldersQuery.refetch()}>Retry folders</button>
+      </div>}
 
-      {/* Filters */}
-      {(total > 0 || search !== '') && (
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="relative flex-1 min-w-48">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="w-full sm:w-52">
+          <label className="label" htmlFor="rule-folder-filter">Folder</label>
+          <select id="rule-folder-filter" className="select" value={folder}
+            onChange={event => {
+              const value = event.target.value
+              selectFolder(value === 'all' || value === 'unfiled' ? value : Number(value))
+            }}>
+            <option value="all">All folders</option>
+            <option value="unfiled">Unfiled</option>
+            {folders.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </div>
+        <div className="min-w-48 flex-1">
+          <label className="label" htmlFor="rule-search">Search rules</label>
+          <div className="relative">
+            <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
             <input
+              id="rule-search"
               className="input pl-8 text-sm"
-              placeholder="Search by pattern or exit..."
-              aria-label="Search rules by pattern or exit"
+              type="search"
+              placeholder="Pattern or exit"
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1) }}
             />
           </div>
         </div>
-      )}
+        {selectedFolder && <div className="flex flex-wrap gap-2" role="group" aria-label={`Actions for ${selectedFolder.name}`}>
+          <button className="btn-secondary" disabled={deleteFolder.isPending} onClick={() => openFolderEditor(selectedFolder)}>
+            <Pencil size={13} aria-hidden="true" /> Rename folder
+          </button>
+          <button className="btn-ghost text-red-400" disabled={deleteFolder.isPending} onClick={() => void handleDeleteFolder(selectedFolder)}>
+            <Trash2 size={13} aria-hidden="true" /> {deleteFolder.isPending ? 'Deleting…' : 'Delete folder'}
+          </button>
+        </div>}
+      </div>
 
       {isLoading || isPlaceholderData ? (
         <div className="card flex items-center justify-center py-16">
@@ -124,7 +227,7 @@ export default function Rules() {
             Loading rules...
           </div>
         </div>
-      ) : error && rules.length === 0 ? null : total === 0 && querySearch === '' ? (
+      ) : error && rules.length === 0 ? null : total === 0 && querySearch === '' && folder === 'all' ? (
         <div className="card">
           <div className="empty-state">
             <div className="w-14 h-14 rounded-2xl bg-gray-800 flex items-center justify-center mb-4">
@@ -139,7 +242,10 @@ export default function Rules() {
         </div>
       ) : rules.length === 0 ? (
         <div className="card text-center py-10">
-          <p className="text-gray-500 text-sm">No rules match your search</p>
+          <p className="text-gray-400 text-sm">{querySearch ? 'No rules match your search' : 'No rules in this folder'}</p>
+          {!querySearch && <button className="btn-primary mt-3" onClick={() => setShowForm(true)}>
+            <Plus size={15} aria-hidden="true" /> New Rule
+          </button>}
         </div>
       ) : (
         <div className="card p-0 overflow-hidden">
@@ -150,6 +256,7 @@ export default function Rules() {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Pattern</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Type</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Exit</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Folder</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Priority</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Status</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Actions</th>
@@ -170,6 +277,9 @@ export default function Rules() {
                     <td className="px-4 py-3 text-gray-300 text-xs">
                       {rule.exit?.name ?? <span className="text-gray-600">—</span>}
                     </td>
+                    <td className="px-4 py-3 text-xs text-gray-400 [overflow-wrap:anywhere]">
+                      {rule.folder_id == null ? 'Unfiled' : folderNames.get(rule.folder_id) ?? '—'}
+                    </td>
                     <td className="px-4 py-3 text-gray-500 text-xs tabular-nums">{rule.priority}</td>
                     <td className="px-4 py-3">
                       <span className={rule.enabled ? 'badge-green' : 'badge-gray'}>
@@ -182,6 +292,7 @@ export default function Rules() {
                           className="btn-ghost p-1.5"
                           onClick={() => setEditRule(rule)}
                           title="Edit"
+                          aria-label={`Edit ${rule.pattern}`}
                         >
                           <Pencil size={13} />
                         </button>
@@ -189,6 +300,7 @@ export default function Rules() {
                           className="btn-ghost p-1.5 text-red-500 hover:text-red-400 hover:bg-red-950/30"
                           onClick={() => handleDelete(rule)}
                           title="Delete"
+                          aria-label={`Delete ${rule.pattern}`}
                         >
                           <Trash2 size={13} />
                         </button>
@@ -210,14 +322,24 @@ export default function Rules() {
         </div>
       )}
 
+      {folderEditor !== null && <FolderForm
+        folder={folderEditor === 'new' ? null : folderEditor}
+        onClose={() => setFolderEditor(null)}
+        onSubmit={name => saveFolder.mutate({ name, id: folderEditor === 'new' ? undefined : folderEditor.id })}
+        loading={saveFolder.isPending}
+        error={saveFolder.error ? getApiError(saveFolder.error) : undefined}
+      />}
+
       {(showForm || editRule) && (
         <RuleFormModal
           rule={editRule}
           exits={exits}
+          folders={folders}
+          defaultFolder={typeof folder === 'number' ? folder : null}
           onClose={() => { setShowForm(false); setEditRule(null) }}
           onSubmit={data => {
-            if (editRule) updateMut.mutate({ id: editRule.id, data })
-            else if (Array.isArray(data.rules)) createBulkMut.mutate(data.rules)
+            if ('rules' in data) createBulkMut.mutate(data.rules)
+            else if (editRule) updateMut.mutate({ id: editRule.id, data })
             else createMut.mutate(data)
           }}
           loading={createMut.isPending || createBulkMut.isPending || updateMut.isPending}
@@ -228,13 +350,63 @@ export default function Rules() {
   )
 }
 
+function FolderForm({ folder, onClose, onSubmit, loading, error }: {
+  folder: RuleFolder | null
+  onClose: () => void
+  onSubmit: (name: string) => void
+  loading: boolean
+  error?: string
+}) {
+  const [name, setName] = useState(folder?.name ?? '')
+  const titleId = useId()
+  const nameId = useId()
+  const dialog = useRef<HTMLDialogElement>(null)
+  const nameInput = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    dialog.current?.showModal()
+    nameInput.current?.focus()
+    nameInput.current?.select()
+  }, [])
+
+  return (
+    <dialog ref={dialog} className="w-11/12 max-w-sm rounded-2xl border border-gray-700 bg-gray-900 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70"
+      aria-labelledby={titleId} onClose={onClose} onCancel={event => { if (loading) event.preventDefault() }}>
+      <form onSubmit={event => {
+        event.preventDefault()
+        const trimmed = name.trim()
+        if (trimmed && !loading) onSubmit(trimmed)
+      }}>
+        <div className="flex items-center justify-between border-b border-gray-800 px-5 py-4">
+          <h2 id={titleId} className="font-semibold text-white">{folder ? 'Rename folder' : 'New folder'}</h2>
+          <button type="button" className="btn-ghost p-1" aria-label="Close folder form"
+            disabled={loading} onClick={() => dialog.current?.close()}><X size={16} /></button>
+        </div>
+        <div className="space-y-3 p-5">
+          <label className="label" htmlFor={nameId}>Folder name</label>
+          <input ref={nameInput} id={nameId} className="input" value={name} required
+            disabled={loading} onChange={event => setName(event.target.value)} />
+          {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-gray-800 px-5 py-4">
+          <button type="button" className="btn-secondary" disabled={loading} onClick={() => dialog.current?.close()}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={loading || !name.trim()}>
+            {loading ? 'Saving…' : folder ? 'Save name' : 'Create folder'}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  )
+}
+
 function RuleFormModal({
-  rule, exits, onClose, onSubmit, loading, error,
+  rule, exits, folders, defaultFolder, onClose, onSubmit, loading, error,
 }: {
   rule: Rule | null
-  exits: any[]
+  exits: Exit[]
+  folders: RuleFolder[]
+  defaultFolder: number | null
   onClose: () => void
-  onSubmit: (data: any) => void
+  onSubmit: (data: RuleSubmission) => void
   loading: boolean
   error?: string
 }) {
@@ -242,12 +414,23 @@ function RuleFormModal({
     pattern: rule?.pattern ?? '',
     type: (rule?.type ?? 'auto') as RuleFormType,
     exit_id: rule?.exit_id ?? null,
+    folder_id: rule ? rule.folder_id ?? null : defaultFolder,
     priority: rule?.priority ?? 100,
     enabled: rule?.enabled ?? true,
   })
   const [localError, setLocalError] = useState('')
+  const titleId = useId()
+  const folderInputId = useId()
+  const dialog = useRef<HTMLDialogElement>(null)
+  const patternInput = useRef<HTMLInputElement>(null)
+  const patternsInput = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    dialog.current?.showModal()
+    const input = patternInput.current ?? patternsInput.current
+    input?.focus()
+  }, [])
 
-  const set = (key: string, val: any) => setForm(f => ({ ...f, [key]: val }))
+  const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm(f => ({ ...f, [key]: value }))
   const patterns = rule ? [form.pattern.trim()].filter(Boolean) : parseRulePatterns(form.pattern)
 
   const handleSubmit = () => {
@@ -258,10 +441,14 @@ function RuleFormModal({
     setLocalError('')
 
     if (rule) {
-      onSubmit({
-        ...form,
-        type: resolveRuleType(form.pattern, form.type),
-      })
+      const { pattern, exit_id, folder_id, priority, enabled } = form
+      const type = resolveRuleType(pattern, form.type)
+      if (pattern === rule.pattern && type === rule.type && exit_id === rule.exit_id &&
+        priority === rule.priority && enabled === rule.enabled && folder_id !== (rule.folder_id ?? null)) {
+        onSubmit({ folder_id })
+      } else {
+        onSubmit({ pattern, type, exit_id, folder_id, priority, enabled })
+      }
       return
     }
 
@@ -269,6 +456,7 @@ function RuleFormModal({
       pattern,
       type: resolveRuleType(pattern, form.type),
       exit_id: form.exit_id,
+      folder_id: form.folder_id,
       priority: form.priority,
       enabled: form.enabled,
     }))
@@ -278,17 +466,21 @@ function RuleFormModal({
   const displayError = localError || error
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-          <h3 className="font-semibold text-white">{rule ? 'Edit Rule' : 'New Rule'}</h3>
-          <button className="btn-ghost p-1" onClick={onClose}><X size={16} /></button>
+    <dialog ref={dialog} aria-labelledby={titleId} onClose={onClose} onCancel={event => { if (loading) event.preventDefault() }}
+      className="w-11/12 max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70">
+      <div className="flex max-h-[90dvh] flex-col">
+        <div className="flex shrink-0 items-center justify-between px-5 py-4 border-b border-gray-800">
+          <h2 id={titleId} className="font-semibold text-white">{rule ? 'Edit Rule' : 'New Rule'}</h2>
+          <button className="btn-ghost p-1" aria-label="Close rule form" disabled={loading}
+            onClick={() => dialog.current?.close()}><X size={16} /></button>
         </div>
-        <div className="p-5 space-y-4">
+        <div className="space-y-4 overflow-y-auto p-5">
           <div>
             <label className="label">{rule ? 'Pattern *' : 'Patterns *'}</label>
             {rule ? (
               <input
+                ref={patternInput}
+                aria-label="Pattern"
                 className="input font-mono"
                 placeholder="example.com or +.example.com"
                 value={form.pattern}
@@ -299,6 +491,8 @@ function RuleFormModal({
               />
             ) : (
               <textarea
+                ref={patternsInput}
+                aria-label="Patterns"
                 className="input font-mono min-h-[150px] resize-y"
                 placeholder={'example.com\n+.example.org\napi.example.net'}
                 value={form.pattern}
@@ -358,6 +552,16 @@ function RuleFormModal({
               ))}
             </select>
           </div>
+          <div>
+            <label className="label" htmlFor={folderInputId}>Folder</label>
+            <select id={folderInputId} className="select" value={form.folder_id ?? ''}
+              onChange={event => set('folder_id', event.target.value ? Number(event.target.value) : null)}>
+              <option value="">Unfiled</option>
+              {form.folder_id != null && !folders.some(item => item.id === form.folder_id) &&
+                <option value={form.folder_id}>Current folder</option>}
+              {folders.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </div>
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <div
               className={`relative w-9 h-5 rounded-full transition-colors ${form.enabled ? 'bg-indigo-600' : 'bg-gray-700'}`}
@@ -373,8 +577,8 @@ function RuleFormModal({
             </div>
           )}
         </div>
-        <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-800">
-          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        <div className="flex shrink-0 justify-end gap-2 px-5 py-4 border-t border-gray-800">
+          <button className="btn-secondary" disabled={loading} onClick={() => dialog.current?.close()}>Cancel</button>
           <button
             className="btn-primary"
             disabled={loading || patterns.length === 0}
@@ -384,7 +588,7 @@ function RuleFormModal({
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }
 

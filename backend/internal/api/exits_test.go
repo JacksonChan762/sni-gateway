@@ -150,18 +150,50 @@ func TestNormalizeLegacyWireguardEnvironmentForSingBox(t *testing.T) {
 	}
 }
 
-func TestValidateExitRequestRejectsCustomWireguardHostname(t *testing.T) {
-	err := validateExitRequest(CreateExitRequest{
-		Protocol:              "wireguard",
-		Provider:              "custom",
-		WireguardEndpointIP:   "vpn.example.com",
-		WireguardEndpointPort: "51820",
-		WireguardPublicKey:    "public",
-		WireguardPrivKey:      "private",
-		WireguardAddresses:    "10.64.222.21/32",
-	})
-	if err == nil || !strings.Contains(err.Error(), "must be an IP address") {
-		t.Fatalf("error = %v, want endpoint IP validation error", err)
+func TestCustomWireguardHostnameAndTuningSurviveYAMLImportAndExport(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	req := CreateExitRequest{ConfigYAML: `services:
+  singbox:
+    environment:
+      VPN_TYPE: wireguard
+      VPN_SERVICE_PROVIDER: custom
+      WIREGUARD_ENDPOINT_IP: wg.example.net
+      WIREGUARD_ENDPOINT_PORT: 51820
+      WIREGUARD_PRIVATE_KEY: ` + key + `
+      WIREGUARD_PUBLIC_KEY: ` + key + `
+      WIREGUARD_ADDRESSES: 10.2.0.2/32
+      WIREGUARD_MTU: 1380
+      WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL: 25
+`}
+	if err := applyYAMLToExitRequest(&req); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateExitRequest(req); err != nil {
+		t.Fatal(err)
+	}
+	config, err := buildExitConfigJSON(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := models.Exit{Protocol: req.Protocol, Provider: req.Provider, Runtime: req.Runtime, ConfigJSON: config}
+	if err := normalizeExitConfig(&exit); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateExitConfig(&exit); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := buildExitConfigYAML(&exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		"WIREGUARD_ENDPOINT_IP=wg.example.net",
+		"WIREGUARD_MTU=1380",
+		"WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL=25",
+	} {
+		if !strings.Contains(exported, field) {
+			t.Errorf("export missing %s", field)
+		}
 	}
 }
 

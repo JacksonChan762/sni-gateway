@@ -39,6 +39,42 @@ covers Compose service health, not end-to-end VPN routing; test a routed domain 
 Backups contain private configuration and have restrictive permissions. Copy them to
 secure storage and periodically remove old backups according to your retention policy.
 
+## Switch an existing deployment to another branch
+
+This procedure assumes an existing sing-box deployment with the `update` command
+in `sni-gateway.sh`. Start in the original checkout at the version currently deployed,
+with PostgreSQL running. Keep the same `.env` and Compose project name so Docker uses
+the existing volumes. This example targets `feature/ddns-tls-rule-folders`.
+
+Create the local tracking branch at the currently deployed commit. That gives the
+updater the correct old revision to record alongside the database backup.
+
+```bash
+upgrade_branch=feature/ddns-tls-rule-folders
+test -z "$(git status --porcelain)" &&
+git remote set-branches --add origin "$upgrade_branch" &&
+git fetch origin &&
+git merge-base --is-ancestor HEAD "origin/$upgrade_branch" &&
+git switch -c "$upgrade_branch" &&
+git branch --set-upstream-to="origin/$upgrade_branch" &&
+./sni-gateway.sh update --check
+```
+
+Confirm that `Available source` is the intended commit, then apply the update and
+check the Compose services.
+
+```bash
+./sni-gateway.sh update --apply && docker compose ps
+```
+
+Future manual and scheduled updates use the new tracking branch.
+
+For older deployments with Nginx ingress or a separate `update.sh`, record the
+deployed Git revision and make a PostgreSQL backup first. Fast-forward the original
+checkout to the target version and run that version's `./sni-gateway.sh install`.
+Publish the saved rules if the new gateway has no published routes. If scheduled
+updates were enabled, refresh the service unit using the steps below.
+
 ## Enable daily updates (optional)
 
 First run a manual update successfully. Edit **both paths** in
